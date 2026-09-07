@@ -1,0 +1,12 @@
+# Build files
+build/
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Editor / temporary files
+*.swp
+*.swo
