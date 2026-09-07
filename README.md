@@ -1,6 +1,6 @@
-# NUUT — The Celestial Goddess
+# NUUT - The Celestial Goddess
 
-### A Celestial Polyphonic Synthesizer
+### Celestial Harmonic Synthesizer
 
 NUUT is an experimental polyphonic synthesizer inspired by celestial
 harmony, astronomical relationships and the idea of sound as a constellation.
