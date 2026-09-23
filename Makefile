@@ -2,7 +2,7 @@
 TARGET = nuut
 
 # Sources
-CPP_SOURCES = nuut.cpp touch/pads.cpp
+CPP_SOURCES = nuut.cpp $(wildcard touch/*.cpp) $(wildcard nuut/*.cpp)
 
 # Library Locations
 LIBDAISY_DIR = lib/libDaisy/
