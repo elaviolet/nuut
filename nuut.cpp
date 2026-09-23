@@ -2,6 +2,7 @@
 #include "daisysp.h"
 #include "Utility/delayline.h"
 #include "touch/pads.h"
+#include "touch/knobs.h"
 #include "nuut/voice.h"
 #include "nuut/planets.h"
 #include "nuut/constellation.h"
@@ -19,6 +20,7 @@ daisysp::DelayLine<float, DELAY_SIZE> reverbDelayL;
 daisysp::DelayLine<float, DELAY_SIZE> reverbDelayR;
 
 Pads pads;
+Knobs knobs;
 Constellation constellation;
 bool padStates[10] = {false};
 
@@ -78,9 +80,28 @@ void AudioCallback(AudioHandle::InputBuffer in,
                    AudioHandle::OutputBuffer out,
                    size_t size)
     {
+
+    float transitValue = knobs.s36().Process();
+    constellation.SetTransit(transitValue);
+    int oppositionA = -1;
+    int oppositionB = -1;
+    float oppositionProximity = 0.0f;
+
+    bool hasOpposition =
+        constellation.FindOpposition(
+            oppositionA,
+            oppositionB,
+            oppositionProximity
+        );
+
     for(size_t i = 0; i < size; i++)
     {
         float filterMod = (filterLfo.Process() + 1.0f) * 0.5f;
+
+        if(hasOpposition)
+        {
+            filterMod += oppositionProximity * 0.5f;
+        }
 
         float sig = 0.0f;
 
@@ -97,7 +118,12 @@ void AudioCallback(AudioHandle::InputBuffer in,
                     gate = padStates[planet];
             }
 
-            sig += ProcessVoice(voices[v], gate, filterMod);
+            sig += ProcessVoice(
+            voices[v],
+            gate,
+            filterMod,
+            oppositionProximity
+        );
         }
 
         sig *= 0.3f;
@@ -149,12 +175,12 @@ int main()
 {
     hw.Configure();
     hw.Init();
+    knobs.Init(hw);
 
     hw.SetLed(true);
     System::Delay(1000);
     hw.SetLed(false);
 
-    // Inizializzazione pad
     pads.Init();
     float sampleRate = hw.AudioSampleRate();
 

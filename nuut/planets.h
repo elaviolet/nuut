@@ -15,3 +15,17 @@ const float padFrequencies[10] =
     587.33f,
     659.25f
 };
+
+const float initialPlanetPositions[10] =
+{
+    0.0f,
+    35.0f,
+    70.0f,
+    115.0f,
+    160.0f,
+    210.0f,
+    250.0f,
+    290.0f,
+    330.0f,
+    15.0f
+};

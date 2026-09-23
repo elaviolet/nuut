@@ -52,11 +52,23 @@ inline void InitVoice(Voice& v, float sampleRate)
     v.filter.SetRes(0.2f);
 }
 
-inline float ProcessVoice(Voice& v, bool gate, float filterMod)
+inline float ProcessVoice(
+    Voice& v,
+    bool gate,
+    float filterMod,
+    float oppositionProximity
+)
 {
     float sig1 = v.osc1.Process();
 
-    float fmMod = v.fmOsc.Process() * 8.0f;
+    float fmAmount = 8.0f;
+
+    if(oppositionProximity > 0.0f)
+    {
+        fmAmount += oppositionProximity * 160.0f;
+    }
+
+float fmMod = v.fmOsc.Process() * fmAmount;
 
     v.osc2.SetFreq(v.osc2BaseFrequency + fmMod);
 
