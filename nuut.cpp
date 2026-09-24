@@ -83,6 +83,10 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
     float transitValue = knobs.s36().Process();
     constellation.SetTransit(transitValue);
+
+    float constellationValue = knobs.s30().Process();
+    constellation.SetConstellation(constellationValue);
+    
     int oppositionA = -1;
     int oppositionB = -1;
     float oppositionProximity = 0.0f;

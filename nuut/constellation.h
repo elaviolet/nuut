@@ -117,6 +117,11 @@ public:
         return voiceIsExtra[voiceIndex];
     }
 
+    void SetConstellation(float value)
+    {
+        constellationAmount = value;
+    }
+
     void SetTransit(float value)
     {
         float transit = value * 360.0f;
@@ -319,6 +324,7 @@ private:
     bool voiceIsExtra[3] = {false, false, false};
     float transitMultiplier = 1.0f;
     float lastAppliedMultiplier = 1.0f;
+    float constellationAmount = 0.0f;
 
     bool IsMainPad(int pad)
     {
