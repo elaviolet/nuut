@@ -13,7 +13,9 @@ using namespace daisysp;
 DaisySeed hw;
 
 
-Voice voices[3];
+Voice voices[14];
+PlanetConstellationVoice constellationVoices[7];
+bool constellationVoiceWasActive[7] = {false};
 constexpr size_t DELAY_SIZE = 24000;
 
 daisysp::DelayLine<float, DELAY_SIZE> reverbDelayL;
@@ -28,7 +30,6 @@ Oscillator filterLfo;
 
 bool AnyPadActive();
 
-// Pad premuto
 // Pad touched
 void OnPadTouch(uint16_t pad)
 {
@@ -36,13 +37,12 @@ void OnPadTouch(uint16_t pad)
     {
         padStates[pad] = true;
 
-        constellation.AssignPlanet(pad);
-
         hw.SetLed(true);
+
+        constellation.AssignPlanet(pad);
     }
 }
 
-// Pad rilasciato
 // Pad released
 void OnPadRelease(uint16_t pad)
 {
@@ -86,7 +86,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
     float constellationValue = knobs.s30().Process();
     constellation.SetConstellation(constellationValue);
-    
+
     int oppositionA = -1;
     int oppositionB = -1;
     float oppositionProximity = 0.0f;
@@ -97,6 +97,25 @@ void AudioCallback(AudioHandle::InputBuffer in,
             oppositionB,
             oppositionProximity
         );
+
+    bool currentConstellationActive[7] = {false};
+
+    for(int v = 3; v < 10; v++)
+    {
+        int idx = v - 3;
+        int planet = constellation.GetPlanet(v);
+
+        if(planet != -1 && constellation.IsExtraVoice(v))
+        {
+            currentConstellationActive[idx] = true;
+
+            if(!constellationVoiceWasActive[idx])
+            {
+                constellationVoices[idx].triggered = true;
+            }
+        }
+    }
+
 
     for(size_t i = 0; i < size; i++)
     {
@@ -109,25 +128,43 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
         float sig = 0.0f;
 
-        for(int v = 0; v < 3; v++)
+        for(int i = 0; i < 7; i++)
         {
-            bool gate = false;
+            constellationVoices[i].active = false;
+        }
+
+        for(int v = 0; v < 10; v++)
+        {
             int planet = constellation.GetPlanet(v);
 
-            if(planet != -1)
-            {
-                if(constellation.IsExtraVoice(v))
-                    gate = AnyPadActive();
-                else
-                    gate = padStates[planet];
-            }
+            if(planet == -1)
+                continue;
 
-            sig += ProcessVoice(
-            voices[v],
-            gate,
-            filterMod,
-            oppositionProximity
-        );
+            if(constellation.IsExtraVoice(v))
+            {
+                if(!constellationVoices[v - 3].active)
+                {
+                    constellationVoices[v - 3].triggered = true;
+                }
+
+                constellationVoices[v - 3].active = true;
+
+                sig += ProcessPlanetConstellationVoice(
+                    constellationVoices[v - 3],
+                    padFrequencies[planet]
+                );
+            }
+            else
+            {
+                bool gate = padStates[planet];
+
+                sig += ProcessVoice(
+                    voices[v],
+                    gate,
+                    filterMod,
+                    oppositionProximity
+                );
+            }
         }
 
         sig *= 0.3f;
@@ -173,6 +210,11 @@ void AudioCallback(AudioHandle::InputBuffer in,
         out[0][i] = outputL;
         out[1][i] = outputR;
         }
+
+        for(int i = 0; i < 7; i++)
+        {
+            constellationVoiceWasActive[i] = currentConstellationActive[i];
+        }
 }
 
 int main()
@@ -199,9 +241,17 @@ int main()
     reverbDelayL.SetDelay(sampleRate * 0.31f);
     reverbDelayR.SetDelay(sampleRate * 0.43f);
 
-    for(int i = 0; i < 3; i++)
+    for(int i = 0; i < 14; i++)
     {
         InitVoice(voices[i], sampleRate);
+    }
+
+    for(int i = 0; i < 7; i++)
+    {
+        InitPlanetConstellationVoice(
+            constellationVoices[i],
+            sampleRate
+        );
     }
 
     // Inizializza la costellazione

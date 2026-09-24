@@ -103,7 +103,7 @@ public:
 
     int GetPlanet(int voiceIndex)
     {
-        if(voiceIndex < 0 || voiceIndex >= 3)
+        if(voiceIndex < 0 || voiceIndex >= 14)
             return -1;
 
         return voicePad[voiceIndex];
@@ -111,7 +111,7 @@ public:
 
     bool IsExtraVoice(int voiceIndex)
     {
-        if(voiceIndex < 0 || voiceIndex >= 3)
+        if(voiceIndex < 0 || voiceIndex >= 14)
             return false;
 
         return voiceIsExtra[voiceIndex];
@@ -120,6 +120,12 @@ public:
     void SetConstellation(float value)
     {
         constellationAmount = value;
+
+        if(fabsf(value - lastConstellationAmount) > 0.01f)
+        {
+            lastConstellationAmount = value;
+            RebuildConstellation();
+        }
     }
 
     void SetTransit(float value)
@@ -319,12 +325,21 @@ private:
 
     PlanetOrbit planets[10];
 
-    int voicePad[3] = {-1, -1, -1};
+    int voicePad[14] =
+    {
+        -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1
+    };
     int mainPads[3] = {-1, -1, -1};
-    bool voiceIsExtra[3] = {false, false, false};
+    bool voiceIsExtra[14] =
+    {
+        false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false
+    };
     float transitMultiplier = 1.0f;
     float lastAppliedMultiplier = 1.0f;
     float constellationAmount = 0.0f;
+    float lastConstellationAmount = -1.0f;
 
     bool IsMainPad(int pad)
     {
@@ -337,27 +352,25 @@ private:
         return false;
     }
 
-    bool IsUsed(int pad, const int* desiredPads, int count)
+    bool IsUsed(int pad)
     {
-        for(int i = 0; i < count; i++)
+        for(int i = 0; i < 14; i++)
         {
-            if(desiredPads[i] == pad)
+            if(voicePad[i] == pad)
                 return true;
         }
 
         return false;
     }
 
-    int FindClosestPad(float targetFrequency,
-                       const int* desiredPads,
-                       int count)
+    int FindClosestPad(float targetFrequency)
     {
         int bestPad = -1;
         float bestDistance = 1000000.0f;
 
         for(int pad = 0; pad < 10; pad++)
         {
-            if(IsUsed(pad, desiredPads, count))
+            if(IsUsed(pad))
                 continue;
 
             float distance =
@@ -391,11 +404,7 @@ private:
         {
             float root = padFrequencies[desiredPads[0]];
 
-            int extra1 = FindClosestPad(
-                root * 1.5f,
-                desiredPads,
-                desiredCount
-            );
+            int extra1 = FindClosestPad(root * 1.5f);
 
             if(extra1 != -1)
             {
@@ -403,11 +412,7 @@ private:
                 desiredCount++;
             }
 
-            int extra2 = FindClosestPad(
-                root * 2.0f,
-                desiredPads,
-                desiredCount
-            );
+            int extra2 = FindClosestPad(root * 2.0f);
 
             if(extra2 != -1)
             {
@@ -422,11 +427,7 @@ private:
 
                 float targetFrequency = std::sqrt(frequency1 * frequency2);
 
-                int extra = FindClosestPad(
-                    targetFrequency,
-                    desiredPads,
-                    desiredCount
-                );
+               int extra = FindClosestPad(targetFrequency);
 
                 if(extra != -1)
                 {
@@ -479,6 +480,40 @@ private:
             if(changed && voicePad[i] != -1)
                 ConfigureVoice(i, voicePad[i]);
         }
+
+
+            for(int i = 3; i < 14; i++)
+            {
+                voicePad[i] = -1;
+                voiceIsExtra[i] = false;
+            }
+
+            if(constellationAmount <= 0.0f)
+            return;
+
+            int extraVoiceCount =
+                static_cast<int>(constellationAmount * 7.0f);
+
+            int extraVoiceIndex = 3;
+            int addedVoices = 0;
+
+            for(int pad = 0; pad < 10 && extraVoiceIndex < 10; pad++)
+            {
+                if(IsUsed(pad))
+                    continue;
+
+                if(addedVoices >= extraVoiceCount)
+                    break;
+
+                voicePad[extraVoiceIndex] = pad;
+                voiceIsExtra[extraVoiceIndex] = true;
+
+                ConfigureVoice(extraVoiceIndex, pad);
+
+
+                extraVoiceIndex++;
+                addedVoices++;
+            }
     }
 
     void ConfigureVoice(int voiceIndex, int pad)

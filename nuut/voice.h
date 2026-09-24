@@ -4,10 +4,10 @@
 
 using namespace daisysp;
 
-// Parametri globali dell'envelope, definiti in nuut.cpp
 extern float attackIncrement;
 extern float releaseIncrement;
 
+//3 main planets
 struct Voice
 {
     Oscillator osc1;
@@ -24,6 +24,20 @@ struct Voice
     float frequency = 432.0f;
     float osc2BaseFrequency = 432.0f;
 };
+
+//extra planets
+struct PlanetConstellationVoice
+{
+    Oscillator osc;
+    Oscillator fmOsc;
+
+    float envelope = 0.0f;
+    float sparkleEnvelope = 0.0f;
+    bool active = false;
+    bool triggered = false;
+    float frequency = 432.0f;
+};
+
 
 inline void InitVoice(Voice& v, float sampleRate)
 {
@@ -52,6 +66,23 @@ inline void InitVoice(Voice& v, float sampleRate)
     v.filter.SetRes(0.2f);
 }
 
+inline void InitPlanetConstellationVoice(
+    PlanetConstellationVoice& v,
+    float sampleRate)
+{
+    v.osc.Init(sampleRate);
+    v.osc.SetWaveform(Oscillator::WAVE_SIN);
+    v.osc.SetAmp(0.12f);
+
+    v.fmOsc.Init(sampleRate);
+    v.fmOsc.SetWaveform(Oscillator::WAVE_SIN);
+    v.fmOsc.SetFreq(5.0f);
+    v.fmOsc.SetAmp(1.0f);
+
+    v.active = false;
+    v.triggered = false;
+}
+
 inline float ProcessVoice(
     Voice& v,
     bool gate,
@@ -77,7 +108,6 @@ float fmMod = v.fmOsc.Process() * fmAmount;
 
     float sig = (sig1 + sig2 + sig3) * 0.25f;
 
-    // Envelope
     if(gate)
     {
         v.envelope += attackIncrement;
@@ -95,7 +125,6 @@ float fmMod = v.fmOsc.Process() * fmAmount;
 
     sig *= v.envelope;
 
-    // Filter
     float filterFreq = 700.0f + filterMod * 600.0f;
 
     if(filterFreq < 100.0f)
@@ -107,4 +136,50 @@ float fmMod = v.fmOsc.Process() * fmAmount;
     sig = v.filter.Low();
 
     return sig;
+}
+
+inline float ProcessPlanetConstellationVoice(
+    PlanetConstellationVoice& v,
+    float frequency)
+{
+    const float attackIncrement = 1.0f / (0.03f * 48000.0f);
+    const float releaseIncrement = 1.0f / (0.30f * 48000.0f);
+
+    if(v.active)
+    {
+        v.envelope += attackIncrement;
+
+        if(v.envelope > 1.0f)
+            v.envelope = 1.0f;
+    }
+    else
+    {
+        v.envelope -= releaseIncrement;
+
+        if(v.envelope < 0.0f)
+            v.envelope = 0.0f;
+    }
+
+    v.osc.SetFreq(frequency);
+
+    float sig = v.osc.Process();
+
+    if(v.triggered)
+    {
+        v.sparkleEnvelope = 1.0f;
+        v.triggered = false;
+    }
+
+    if(v.sparkleEnvelope > 0.0f)
+    {
+        float sparkle = v.fmOsc.Process() * 0.3f;
+        sig += sparkle * v.sparkleEnvelope;
+
+        v.sparkleEnvelope *= 0.995f;
+
+        if(v.sparkleEnvelope < 0.001f)
+            v.sparkleEnvelope = 0.0f;
+    }
+
+    return sig * v.envelope * 0.12f;
 }
