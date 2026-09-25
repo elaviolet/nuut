@@ -15,7 +15,7 @@ void Crystals::Init(float sampleRate)
     crystalFilter.SetRes(0.4f);
 }
 
-float Crystals::Process(float input, int mode)
+float Crystals::Process(float input, int mode, float wet)
 {
 
      // Ametista
@@ -26,7 +26,10 @@ float Crystals::Process(float input, int mode)
 
         crystalDelay.Write(input + delayed * 0.45f);
 
-        return input + shimmer * 0.35f + delayed * 0.25f;
+        float effect =
+            input + shimmer * 0.35f + delayed * 0.25f;
+
+        return input * (1.0f - wet) + effect * wet;
     }
 
     // Acquamarina
@@ -44,7 +47,9 @@ float Crystals::Process(float input, int mode)
 
         crystalDelay.Write(input + delayed * 0.35f);
 
-        return input + delayed * 0.35f;
+        float effect = input + delayed * 0.35f;
+
+        return input * (1.0f - wet) + effect * wet;
     }
 
     // Ossidiana
@@ -58,7 +63,9 @@ float Crystals::Process(float input, int mode)
 
         float dark = crystalFilter.Low();
 
-        return input * 0.65f + dark * 0.55f;
+        float effect = input * 0.65f + dark * 0.55f;
+
+        return input * (1.0f - wet) + effect * wet;
     }
 
     return input;

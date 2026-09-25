@@ -87,9 +87,12 @@ void AudioCallback(AudioHandle::InputBuffer in,
                    AudioHandle::OutputBuffer out,
                    size_t size)
 {
+    //Transit
     float transitValue = knobs.s36().Process();
     constellation.SetTransit(transitValue);
 
+
+    //Constellation
     float constellationValue = knobs.s30().Process();
     constellation.SetConstellation(constellationValue);
 
@@ -121,6 +124,9 @@ void AudioCallback(AudioHandle::InputBuffer in,
             }
         }
     }
+
+    //crystals
+    float crystalWet = knobs.s35().Process();
 
     for(size_t i = 0; i < size; i++)
     {
@@ -174,7 +180,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
             );
         }
 
-        sig = crystals.Process(sig, switches.A());
+        sig = crystals.Process(sig, switches.A(), crystalWet);
 
         sig *= 0.3f;
 
@@ -230,8 +236,10 @@ void AudioCallback(AudioHandle::InputBuffer in,
         constellationVoiceWasActive[i] =
             currentConstellationActive[i];
     }
+
+    
 }
-//
+// ACend
 
 int main()
 {

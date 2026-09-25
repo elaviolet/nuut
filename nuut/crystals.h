@@ -7,7 +7,7 @@ class Crystals
 {
 public:
     void Init(float sampleRate);
-    float Process(float input, int mode);
+    float Process(float input, int mode, float wet);
 
 private:
     daisysp::DelayLine<float, 24000> crystalDelay;
