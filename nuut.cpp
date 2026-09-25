@@ -76,11 +76,11 @@ bool AnyPadActive()
     return false;
 }
 
+//
 void AudioCallback(AudioHandle::InputBuffer in,
                    AudioHandle::OutputBuffer out,
                    size_t size)
-    {
-
+{
     float transitValue = knobs.s36().Process();
     constellation.SetTransit(transitValue);
 
@@ -116,10 +116,10 @@ void AudioCallback(AudioHandle::InputBuffer in,
         }
     }
 
-
     for(size_t i = 0; i < size; i++)
     {
-        float filterMod = (filterLfo.Process() + 1.0f) * 0.5f;
+        float filterMod =
+            (filterLfo.Process() + 1.0f) * 0.5f;
 
         if(hasOpposition)
         {
@@ -128,68 +128,69 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
         float sig = 0.0f;
 
-        for(int i = 0; i < 7; i++)
-        {
-            constellationVoices[i].active = false;
-        }
-
         for(int v = 0; v < 10; v++)
         {
             int planet = constellation.GetPlanet(v);
 
+            if(v >= 3)
+            {
+                int idx = v - 3;
+
+                if(planet != -1 && constellation.IsExtraVoice(v))
+                {
+                    constellationVoices[idx].active = true;
+                    constellationVoices[idx].frequency =
+                        padFrequencies[planet];
+                }
+                else
+                {
+                    constellationVoices[idx].active = false;
+                }
+
+                sig += ProcessPlanetConstellationVoice(
+                    constellationVoices[idx],
+                    constellationVoices[idx].frequency
+                );
+
+                continue;
+            }
+
             if(planet == -1)
                 continue;
 
-            if(constellation.IsExtraVoice(v))
-            {
-                if(!constellationVoices[v - 3].active)
-                {
-                    constellationVoices[v - 3].triggered = true;
-                }
+            bool gate = padStates[planet];
 
-                constellationVoices[v - 3].active = true;
-
-                sig += ProcessPlanetConstellationVoice(
-                    constellationVoices[v - 3],
-                    padFrequencies[planet]
-                );
-            }
-            else
-            {
-                bool gate = padStates[planet];
-
-                sig += ProcessVoice(
-                    voices[v],
-                    gate,
-                    filterMod,
-                    oppositionProximity
-                );
-            }
+            sig += ProcessVoice(
+                voices[v],
+                gate,
+                filterMod,
+                oppositionProximity
+            );
         }
 
         sig *= 0.3f;
 
         float inputLevel = fabsf(sig);
 
-        // Envelope follower
         float attackCoeff = 0.001f;
         float releaseCoeff = 0.0001f;
 
         if(inputLevel > compressorEnvelope)
-            compressorEnvelope += (inputLevel - compressorEnvelope) * attackCoeff;
+            compressorEnvelope +=
+                (inputLevel - compressorEnvelope) * attackCoeff;
         else
-            compressorEnvelope += (inputLevel - compressorEnvelope) * releaseCoeff;
+            compressorEnvelope +=
+                (inputLevel - compressorEnvelope) * releaseCoeff;
 
-        // Compressione
         float threshold = 0.25f;
         float ratio = 3.0f;
-
         float gain = 1.0f;
 
         if(compressorEnvelope > threshold)
         {
             float compressedLevel =
-                threshold + (compressorEnvelope - threshold) / ratio;
+                threshold +
+                (compressorEnvelope - threshold) / ratio;
 
             gain = compressedLevel / compressorEnvelope;
         }
@@ -198,8 +199,13 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
         float feedback = 0.35f;
 
-        reverbDelayL.Write(sig + reverbDelayL.Read() * feedback);
-        reverbDelayR.Write(sig + reverbDelayR.Read() * feedback);
+        reverbDelayL.Write(
+            sig + reverbDelayL.Read() * feedback
+        );
+
+        reverbDelayR.Write(
+            sig + reverbDelayR.Read() * feedback
+        );
 
         float delayedL = reverbDelayL.Read();
         float delayedR = reverbDelayR.Read();
@@ -209,13 +215,15 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
         out[0][i] = outputL;
         out[1][i] = outputR;
-        }
+    }
 
-        for(int i = 0; i < 7; i++)
-        {
-            constellationVoiceWasActive[i] = currentConstellationActive[i];
-        }
+    for(int i = 0; i < 7; i++)
+    {
+        constellationVoiceWasActive[i] =
+            currentConstellationActive[i];
+    }
 }
+//
 
 int main()
 {
