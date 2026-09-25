@@ -87,9 +87,12 @@ inline float ProcessVoice(
     Voice& v,
     bool gate,
     float filterMod,
-    float oppositionProximity
-)
+    float oppositionProximity,
+    float originRatio)
 {
+    v.osc1.SetFreq(v.frequency * 0.5f * originRatio);
+    v.osc3.SetFreq(v.frequency * 1.5f * originRatio);
+
     float sig1 = v.osc1.Process();
 
     float fmAmount = 8.0f;
@@ -99,9 +102,11 @@ inline float ProcessVoice(
         fmAmount += oppositionProximity * 160.0f;
     }
 
-float fmMod = v.fmOsc.Process() * fmAmount;
+    float fmMod = v.fmOsc.Process() * fmAmount;
 
-    v.osc2.SetFreq(v.osc2BaseFrequency + fmMod);
+    v.osc2.SetFreq(
+        v.osc2BaseFrequency * originRatio + fmMod
+    );
 
     float sig2 = v.osc2.Process();
     float sig3 = v.osc3.Process();

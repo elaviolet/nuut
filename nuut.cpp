@@ -87,6 +87,10 @@ void AudioCallback(AudioHandle::InputBuffer in,
                    AudioHandle::OutputBuffer out,
                    size_t size)
 {
+
+    float originValue = knobs.s31().Process();
+
+
     //Transit
     float transitValue = knobs.s36().Process();
     constellation.SetTransit(transitValue);
@@ -109,6 +113,9 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
     bool currentConstellationActive[7] = {false};
 
+    float originSemitones = (originValue - 0.5f) * 24.0f;
+    float originRatio = powf(2.0f, originSemitones / 12.0f);
+
     for(int v = 3; v < 10; v++)
     {
         int idx = v - 3;
@@ -126,6 +133,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
     }
 
     //crystals
+    float crystalAura = knobs.s33().Process();
+    float crystalRefraction = knobs.s34().Process();
     float crystalWet = knobs.s35().Process();
 
     for(size_t i = 0; i < size; i++)
@@ -152,7 +161,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
                 {
                     constellationVoices[idx].active = true;
                     constellationVoices[idx].frequency =
-                        padFrequencies[planet];
+                        padFrequencies[planet] * originRatio;
                 }
                 else
                 {
@@ -176,13 +185,16 @@ void AudioCallback(AudioHandle::InputBuffer in,
                 voices[v],
                 gate,
                 filterMod,
-                oppositionProximity
+                oppositionProximity,
+                originRatio
             );
         }
 
-        sig = crystals.Process(sig, switches.A(), crystalWet);
+        float drySig = sig;
 
-        sig *= 0.3f;
+        CrystalStereo crystalSig = crystals.Process(sig, switches.A(), crystalAura, crystalRefraction);
+
+        /* sig *= 0.4f;
 
         float inputLevel = fabsf(sig);
 
@@ -222,10 +234,15 @@ void AudioCallback(AudioHandle::InputBuffer in,
         );
 
         float delayedL = reverbDelayL.Read();
-        float delayedR = reverbDelayR.Read();
+        float delayedR = reverbDelayR.Read(); */
 
-        float outputL = sig * 0.8f + delayedL * 0.2f;
-        float outputR = sig * 0.8f + delayedR * 0.2f;
+        float outputL =
+            drySig * (1.0f - crystalWet)
+            + crystalSig.left * crystalWet;
+
+        float outputR =
+            drySig * (1.0f - crystalWet)
+            + crystalSig.right * crystalWet;
 
         out[0][i] = outputL;
         out[1][i] = outputR;
