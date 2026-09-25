@@ -10,6 +10,8 @@ public:
     float Process(float input, int mode);
 
 private:
-    daisysp::DelayLine<float, 24000> amethystDelay;
-    daisysp::PitchShifter amethystShifter;
+    daisysp::DelayLine<float, 24000> crystalDelay;
+    daisysp::PitchShifter crystalShifter;
+    daisysp::Oscillator crystalLfo;
+    daisysp::Svf crystalFilter;
 };
