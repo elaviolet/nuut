@@ -3,9 +3,11 @@
 #include "Utility/delayline.h"
 #include "touch/pads.h"
 #include "touch/knobs.h"
+#include "touch/switches.h"
 #include "nuut/voice.h"
 #include "nuut/planets.h"
 #include "nuut/constellation.h"
+#include "nuut/crystals.h"
 
 using namespace daisy;
 using namespace daisysp;
@@ -24,6 +26,9 @@ daisysp::DelayLine<float, DELAY_SIZE> reverbDelayR;
 Pads pads;
 Knobs knobs;
 Constellation constellation;
+Switches switches;
+Crystals crystals;
+
 bool padStates[10] = {false};
 
 Oscillator filterLfo;
@@ -76,7 +81,8 @@ bool AnyPadActive()
     return false;
 }
 
-//
+// AudioCallback begin
+
 void AudioCallback(AudioHandle::InputBuffer in,
                    AudioHandle::OutputBuffer out,
                    size_t size)
@@ -168,6 +174,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
             );
         }
 
+        sig = crystals.Process(sig, switches.A());
+
         sig *= 0.3f;
 
         float inputLevel = fabsf(sig);
@@ -236,7 +244,10 @@ int main()
     hw.SetLed(false);
 
     pads.Init();
+    switches.Init();
     float sampleRate = hw.AudioSampleRate();
+
+    crystals.Init(sampleRate);
 
     filterLfo.Init(sampleRate);
     filterLfo.SetWaveform(Oscillator::WAVE_SIN);
