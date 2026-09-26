@@ -1,4 +1,4 @@
-# Celestial Harmonic Synthesizer
+# NUUT - Celestial Harmonic Synthesizer
 
 NUUT is an experimental polyphonic synthesizer inspired by celestial harmony, astrological relationships and the idea of sound as a constellation.
 
@@ -10,27 +10,26 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 
 <img src="images/touch_nuut.png" alt="NUUT" width="300">
 
-## Switches
+<h3>Switches</h3>
 
-- S07-S08 - Crystal Effect Chain (Amethyst | Aquamarine | Obsidian) - selects the active Crystal processing chain
-- S09-S10 - Transit Mode (Off | Evolving | Drifting) - controls the Transit movement mode and automatic planetary movement
+- S07-S08 - **Crystal Effect Chain** (Amethyst | Aquamarine | Obsidian) | Selects the active Crystal processing chain
+- S09-S10 - **Transit Mode** (Off | Evolving | Drifting) | Controls the Transit movement mode and automatic planetary movement
 
-## Knobs
+<h3>Knobs</h3>
 
-- S30 - Constellation - adds additional planetary voices beyond the 3 main voices
-- S31 - Origin - controls the harmonic root / pitch center and shifts the whole system around the central tuning
-- S32 - Arc - controls the envelope of all active voices, shaping global attack and release time
-- S33 - Aura - controls the depth and character of the selected Crystal transformation
-- S34 - Refraction - controls spatial dispersion and stereo behavior of the Crystal effects
-- S35 - Crystal Mix - controls the balance between the dry signal and the Crystal-processed signal
+- S30 - **Constellation** | Adds additional planetary voices beyond the 3 main voices
+- S31 - **Origin** | Controls the harmonic root / pitch center and shifts the whole system around the central tuning
+- S32 - **Arc** | Controls the envelope of all active voices, shaping global attack and release time
+- S33 - **Aura** | Controls the depth and character of the selected Crystal transformation
+- S34 - **Refraction** | Controls spatial dispersion and stereo behavior of the Crystal effects
+- S35 - **Crystal Mix** | Controls the balance between the dry signal and the Crystal-processed signal
 
-## Faders
+<h3>Faders</h3>
 
 - S36 (left) - **Transit** | Controls planetary orbital movement through the 360° system, enabling astrological events that trigger additional harmonic modulations and sonic transformations
 - S37 (right) - **Radiance** | Controls the energy, brightness and distinctive sonic activity of the selected Crystal effect
 
+<h3>Pads</h3>
 
-## Pads
-
-- P01...P10 - Planets - represent the 10 planetary bodies and determine the main planetary voices and their harmonic relationships
-- P11 - Hold - sustains the selected planetary voices after releasing the corresponding pads
+- P01...P10 - **Planets** | Represent the 10 planetary bodies and determine the main planetary voices and their harmonic relationships
+- P11 - **Hold** | Sustains the selected planetary voices after releasing the corresponding pads
