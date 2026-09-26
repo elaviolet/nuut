@@ -22,5 +22,5 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 | **S37** | **RADIANCE** | Controls the energy, brightness and distinctive sonic activity of the selected Crystal effect. |
 | **S07 / S08** | **CRYSTAL EFFECT CHAIN** | Selects the active Crystal processing chain: **Amethyst / Aquamarine / Obsidian**. |
 | **S09 / S10** | **TRANSIT MODE** | Controls the Transit movement mode; automatic movement can be disabled, evolved or accelerated. |
-| **Pad 1–Pad 10** | **PLANETS** | Represent the 10 planetary bodies and determine the main planetary voices and their harmonic relationships. |
+| **Pad 0–Pad 9** | **PLANETS** | Represent the 10 planetary bodies and determine the main planetary voices and their harmonic relationships. |
 | **P11** | **HOLD** | Sustains the selected planetary voices after releasing the corresponding pads. |
