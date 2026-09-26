@@ -8,7 +8,7 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 
 ## Controls
 
-<img src="images/nuut-panel.png" alt="NUUT" width="300">
+<img src="images/touch_nuut.png" alt="NUUT" width="300">
 
 | Knob / Control | Control | Function |
 |---|---|---|
