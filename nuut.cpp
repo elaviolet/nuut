@@ -14,7 +14,6 @@ using namespace daisysp;
 
 DaisySeed hw;
 
-
 Voice voices[14];
 PlanetConstellationVoice constellationVoices[7];
 bool constellationVoiceWasActive[7] = {false};
@@ -89,12 +88,11 @@ void AudioCallback(AudioHandle::InputBuffer in,
 {
 
     float originValue = knobs.s31().Process();
-
+    float arcValue = knobs.s32().Process();
 
     //Transit
     float transitValue = knobs.s36().Process();
     constellation.SetTransit(transitValue);
-
 
     //Constellation
     float constellationValue = knobs.s30().Process();
@@ -135,6 +133,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
     //crystals
     float crystalAura = knobs.s33().Process();
     float crystalRefraction = knobs.s34().Process();
+    float crystalRadiance = knobs.s37().Process();
     float crystalWet = knobs.s35().Process();
 
     for(size_t i = 0; i < size; i++)
@@ -176,23 +175,24 @@ void AudioCallback(AudioHandle::InputBuffer in,
                 continue;
             }
 
-            if(planet == -1)
-                continue;
+            bool gate = false;
 
-            bool gate = padStates[planet];
+            if(planet != -1)
+                gate = padStates[planet];
 
             sig += ProcessVoice(
                 voices[v],
                 gate,
                 filterMod,
                 oppositionProximity,
-                originRatio
+                originRatio,
+                arcValue
             );
         }
 
         float drySig = sig;
 
-        CrystalStereo crystalSig = crystals.Process(sig, switches.A(), crystalAura, crystalRefraction);
+        CrystalStereo crystalSig = crystals.Process(sig, switches.A(), crystalAura, crystalRefraction, crystalRadiance);
 
         /* sig *= 0.4f;
 
@@ -243,6 +243,21 @@ void AudioCallback(AudioHandle::InputBuffer in,
         float outputR =
             drySig * (1.0f - crystalWet)
             + crystalSig.right * crystalWet;
+
+        float outputGain = 0.7f;
+
+        outputL *= outputGain;
+        outputR *= outputGain;
+
+        if(outputL > 0.95f)
+            outputL = 0.95f;
+        else if(outputL < -0.95f)
+            outputL = -0.95f;
+
+        if(outputR > 0.95f)
+            outputR = 0.95f;
+        else if(outputR < -0.95f)
+            outputR = -0.95f;
 
         out[0][i] = outputL;
         out[1][i] = outputR;

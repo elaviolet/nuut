@@ -88,7 +88,8 @@ inline float ProcessVoice(
     bool gate,
     float filterMod,
     float oppositionProximity,
-    float originRatio)
+    float originRatio,
+    float arcValue)
 {
     v.osc1.SetFreq(v.frequency * 0.5f * originRatio);
     v.osc3.SetFreq(v.frequency * 1.5f * originRatio);
@@ -99,7 +100,7 @@ inline float ProcessVoice(
 
     if(oppositionProximity > 0.0f)
     {
-        fmAmount += oppositionProximity * 160.0f;
+        fmAmount += oppositionProximity * 25.0f;
     }
 
     float fmMod = v.fmOsc.Process() * fmAmount;
@@ -113,16 +114,22 @@ inline float ProcessVoice(
 
     float sig = (sig1 + sig2 + sig3) * 0.25f;
 
+    float attackTime = 0.005f + arcValue * 0.5f;
+    float releaseTime = 0.1f + arcValue * 5.0f;
+
+    float attack = 1.0f / (attackTime * 48000.0f);
+    float release = 1.0f / (releaseTime * 48000.0f);
+
     if(gate)
     {
-        v.envelope += attackIncrement;
+        v.envelope += attack;
 
         if(v.envelope >= 1.0f)
             v.envelope = 1.0f;
     }
     else
     {
-        v.envelope -= releaseIncrement;
+        v.envelope -= release;
 
         if(v.envelope <= 0.0f)
             v.envelope = 0.0f;
