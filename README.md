@@ -23,8 +23,12 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 - S33 - Aura - controls the depth and character of the selected Crystal transformation
 - S34 - Refraction - controls spatial dispersion and stereo behavior of the Crystal effects
 - S35 - Crystal Mix - controls the balance between the dry signal and the Crystal-processed signal
-- S36 - Transit - controls planetary orbital movement through the 360° system, enabling astrological events that trigger additional harmonic modulations and sonic transformations
-- S37 - Radiance - controls the energy, brightness and distinctive sonic activity of the selected Crystal effect
+
+## Faders
+
+- S36 (left) - **Transit** | Controls planetary orbital movement through the 360° system, enabling astrological events that trigger additional harmonic modulations and sonic transformations
+- S37 (right) - **Radiance** | Controls the energy, brightness and distinctive sonic activity of the selected Crystal effect
+
 
 ## Pads
 
