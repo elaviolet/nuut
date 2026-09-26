@@ -8,6 +8,8 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 
 ## Controls
 
+<img src="images/nuut-panel.png" alt="NUUT" width="300">
+
 | Knob / Control | Control | Function |
 |---|---|---|
 | **S30** | **CONSTELLATION** | Adds additional planetary voices beyond the 3 main voices. |
