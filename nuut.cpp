@@ -146,7 +146,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
             filterMod += oppositionProximity * 0.5f;
         }
 
-        float sig = 0.0f;
+        float planetSig = 0.0f;
+        float constellationSig = 0.0f;
 
         for(int v = 0; v < 10; v++)
         {
@@ -156,18 +157,19 @@ void AudioCallback(AudioHandle::InputBuffer in,
             {
                 int idx = v - 3;
 
-                if(planet != -1 && constellation.IsExtraVoice(v))
-                {
-                    constellationVoices[idx].active = true;
-                    constellationVoices[idx].frequency =
-                        padFrequencies[planet] * originRatio;
-                }
-                else
-                {
-                    constellationVoices[idx].active = false;
-                }
+                if(planet != -1 &&
+                    constellation.IsExtraVoice(v) && AnyPadActive())
+                    {
+                        constellationVoices[idx].active = true;
+                        constellationVoices[idx].frequency =
+                            padFrequencies[planet] * originRatio;
+                    }
+                    else
+                    {
+                        constellationVoices[idx].active = false;
+                    }
 
-                sig += ProcessPlanetConstellationVoice(
+                constellationSig += ProcessPlanetConstellationVoice(
                     constellationVoices[idx],
                     constellationVoices[idx].frequency
                 );
@@ -180,7 +182,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
             if(planet != -1)
                 gate = padStates[planet];
 
-            sig += ProcessVoice(
+            planetSig += ProcessVoice(
                 voices[v],
                 gate,
                 filterMod,
@@ -190,51 +192,11 @@ void AudioCallback(AudioHandle::InputBuffer in,
             );
         }
 
+        float sig = planetSig + constellationSig;
+
         float drySig = sig;
 
-        CrystalStereo crystalSig = crystals.Process(sig, switches.A(), crystalAura, crystalRefraction, crystalRadiance);
-
-        /* sig *= 0.4f;
-
-        float inputLevel = fabsf(sig);
-
-        float attackCoeff = 0.001f;
-        float releaseCoeff = 0.0001f;
-
-        if(inputLevel > compressorEnvelope)
-            compressorEnvelope +=
-                (inputLevel - compressorEnvelope) * attackCoeff;
-        else
-            compressorEnvelope +=
-                (inputLevel - compressorEnvelope) * releaseCoeff;
-
-        float threshold = 0.25f;
-        float ratio = 3.0f;
-        float gain = 1.0f;
-
-        if(compressorEnvelope > threshold)
-        {
-            float compressedLevel =
-                threshold +
-                (compressorEnvelope - threshold) / ratio;
-
-            gain = compressedLevel / compressorEnvelope;
-        }
-
-        sig *= gain;
-
-        float feedback = 0.35f;
-
-        reverbDelayL.Write(
-            sig + reverbDelayL.Read() * feedback
-        );
-
-        reverbDelayR.Write(
-            sig + reverbDelayR.Read() * feedback
-        );
-
-        float delayedL = reverbDelayL.Read();
-        float delayedR = reverbDelayR.Read(); */
+        CrystalStereo crystalSig = crystals.Process(sig, switches.A(), crystalAura, crystalRefraction, crystalRadiance, AnyPadActive());
 
         float outputL =
             drySig * (1.0f - crystalWet)

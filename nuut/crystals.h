@@ -13,7 +13,7 @@ class Crystals
 {
 public:
     void Init(float sampleRate);
-    CrystalStereo Process(float input, int mode, float aura, float refraction, float radiance);
+    CrystalStereo Process(float input, int mode, float aura, float refraction, float radiance, bool active);
 
 private:
     daisysp::DelayLine<float, 24000> crystalDelay;

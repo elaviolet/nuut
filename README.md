@@ -12,8 +12,8 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 
 <h3>Switches</h3>
 
-- S07-S08 - **Crystal Effect Chain** (Amethyst | Aquamarine | Obsidian) | Selects the active Crystal processing chain
-- S09-S10 - **Transit Mode** (Off | Evolving | Drifting) | Controls the Transit movement mode and automatic planetary movement
+- S07-S08 - **Crystal Effect Chain** (Obsidian - down | Amethyst - center | Aquamarine - top) | Selects the active Crystal processing chain
+- S09-S10 - **Transit Mode** (Off | Evolving | Drifting ) | Controls the Transit movement mode and automatic planetary movement
 
 <h3>Knobs</h3>
 

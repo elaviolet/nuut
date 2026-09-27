@@ -23,7 +23,7 @@ void Crystals::Init(float sampleRate)
     crystalFilter.SetRes(0.4f);
 }
 
-CrystalStereo Crystals::Process(float input, int mode, float aura, float refraction, float radiance)
+CrystalStereo Crystals::Process(float input, int mode, float aura, float refraction, float radiance, bool active)
 {
     // Ametista
     if(mode == daisy::Switch3::POS_CENTER)
@@ -33,7 +33,7 @@ CrystalStereo Crystals::Process(float input, int mode, float aura, float refract
         // radiance sparkles
         sparkleCounter++;
 
-        if(radiance > 0.05f && sparkleCounter > 1800)
+        if(radiance > 0.05f && sparkleCounter > 1800 && active)
         {
             sparkleRandom =
                 sparkleRandom * 1664525u + 1013904223u;

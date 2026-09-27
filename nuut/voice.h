@@ -72,7 +72,7 @@ inline void InitPlanetConstellationVoice(
 {
     v.osc.Init(sampleRate);
     v.osc.SetWaveform(Oscillator::WAVE_SIN);
-    v.osc.SetAmp(0.12f);
+    v.osc.SetAmp(0.18f);
 
     v.fmOsc.Init(sampleRate);
     v.fmOsc.SetWaveform(Oscillator::WAVE_SIN);
@@ -192,6 +192,6 @@ inline float ProcessPlanetConstellationVoice(
         if(v.sparkleEnvelope < 0.001f)
             v.sparkleEnvelope = 0.0f;
     }
-
-    return sig * v.envelope * 0.12f;
+        
+        return sig * v.envelope * 0.20f;
 }
