@@ -17,6 +17,7 @@ DaisySeed hw;
 Voice voices[14];
 PlanetConstellationVoice constellationVoices[7];
 bool constellationVoiceWasActive[7] = {false};
+
 constexpr size_t DELAY_SIZE = 24000;
 
 daisysp::DelayLine<float, DELAY_SIZE> reverbDelayL;
@@ -29,33 +30,67 @@ Switches switches;
 Crystals crystals;
 
 bool padStates[10] = {false};
+bool holdEnabled = false;
 
 Oscillator filterLfo;
+float transitPosition = 0.0f;
 
 bool AnyPadActive();
 
-// Pad touched
 void OnPadTouch(uint16_t pad)
 {
+    // P11 toggles Hold mode.
+    if(pad == 11)
+    {
+        holdEnabled = !holdEnabled;
+
+        if(holdEnabled)
+        {
+            hw.SetLed(true);
+        }
+        else
+        {
+            for(uint16_t i = 0; i < 10; i++)
+            {
+                padStates[i] = false;
+                constellation.ReleasePlanet(i);
+            }
+
+            hw.SetLed(false);
+        }
+
+        return;
+    }
+
     if(pad < 10)
     {
+        if(holdEnabled)
+        {
+            for(uint16_t i = 0; i < 10; i++)
+            {
+                padStates[i] = false;
+                constellation.ReleasePlanet(i);
+            }
+        }
+
         padStates[pad] = true;
-
         hw.SetLed(true);
-
         constellation.AssignPlanet(pad);
     }
 }
 
-// Pad released
 void OnPadRelease(uint16_t pad)
 {
     if(pad < 10)
     {
+        if(holdEnabled)
+        {
+            // Hold keeps the selected planet active.
+            return;
+        }
+
         padStates[pad] = false;
-
         constellation.ReleasePlanet(pad);
-
         hw.SetLed(AnyPadActive());
     }
 }
@@ -63,10 +98,8 @@ void OnPadRelease(uint16_t pad)
 const float attackTime = 0.30f;
 const float releaseTime = 1.2f;
 
-
 float attackIncrement;
 float releaseIncrement;
-
 float compressorEnvelope = 0.0f;
 
 bool AnyPadActive()
@@ -80,46 +113,107 @@ bool AnyPadActive()
     return false;
 }
 
-// AudioCallback begin
-
-void AudioCallback(AudioHandle::InputBuffer in,
-                   AudioHandle::OutputBuffer out,
-                   size_t size)
+void AudioCallback(
+    AudioHandle::InputBuffer in,
+    AudioHandle::OutputBuffer out,
+    size_t size)
 {
-
     float originValue = knobs.s31().Process();
     float arcValue = knobs.s32().Process();
 
-    //Transit
-    float transitValue = knobs.s36().Process();
-    constellation.SetTransit(transitValue);
+    // Transit
+    float transitKnob = knobs.s36().Process();
+    int transitMode = switches.B();
 
-    //Constellation
+    if(transitMode == Switch3::POS_CENTER)
+    {
+        // OFF: the fader directly controls the orbital position.
+        transitPosition = transitKnob;
+    }
+    else
+    {
+        // Automatic movement starts from the current position.
+        float speed = 0.00005f;
+
+        if(transitMode == Switch3::POS_DOWN)
+            speed = 0.00015f;
+
+        transitPosition += speed;
+
+        if(transitPosition > 1.0f)
+            transitPosition -= 1.0f;
+    }
+
+    constellation.SetTransit(transitPosition);
+
+    // Constellation
     float constellationValue = knobs.s30().Process();
     constellation.SetConstellation(constellationValue);
 
-    int oppositionA = -1;
-    int oppositionB = -1;
-    float oppositionProximity = 0.0f;
+    int aspectA = -1;
+    int aspectB = -1;
+    float aspectDistance = 0.0f;
 
-    bool hasOpposition =
-        constellation.FindOpposition(
-            oppositionA,
-            oppositionB,
-            oppositionProximity
+    int currentAspect =
+        constellation.FindAspect(
+            aspectA,
+            aspectB,
+            aspectDistance
         );
+
+    AspectData aspect;
+
+    aspect.type = currentAspect;
+
+    switch(currentAspect)
+    {
+        case ASPECT_CONJUNCTION:
+            aspect.intensity = 0.60f;
+            break;
+
+        case ASPECT_SEXTILE:
+            aspect.shimmer = 0.70f;
+            break;
+
+        case ASPECT_SQUARE:
+            aspect.tension = 0.70f;
+            break;
+
+        case ASPECT_TRINE:
+            aspect.shimmer = 0.50f;
+            aspect.intensity = 0.40f;
+            break;
+
+        case ASPECT_OPPOSITION:
+            aspect.tension = 0.80f;
+            break;
+    }
+
+
+    if(aspect.type != ASPECT_NONE)
+        {
+            aspect.proximity =
+                constellation.GetAspectProximity(
+                    aspectDistance,
+                    aspect.type
+                );
+        }
 
     bool currentConstellationActive[7] = {false};
 
-    float originSemitones = (originValue - 0.5f) * 24.0f;
-    float originRatio = powf(2.0f, originSemitones / 12.0f);
+    float originSemitones =
+        (originValue - 0.5f) * 24.0f;
+
+    float originRatio =
+        powf(2.0f, originSemitones / 12.0f);
 
     for(int v = 3; v < 10; v++)
     {
         int idx = v - 3;
         int planet = constellation.GetPlanet(v);
 
-        if(planet != -1 && constellation.IsExtraVoice(v))
+        if(planet != -1 &&
+           constellation.IsExtraVoice(v))
         {
             currentConstellationActive[idx] = true;
 
@@ -130,7 +224,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
         }
     }
 
-    //crystals
+    // Crystals
     float crystalAura = knobs.s33().Process();
     float crystalRefraction = knobs.s34().Process();
     float crystalRadiance = knobs.s37().Process();
@@ -140,11 +234,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
     {
         float filterMod =
             (filterLfo.Process() + 1.0f) * 0.5f;
-
-        if(hasOpposition)
-        {
-            filterMod += oppositionProximity * 0.5f;
-        }
 
         float planetSig = 0.0f;
         float constellationSig = 0.0f;
@@ -158,21 +247,24 @@ void AudioCallback(AudioHandle::InputBuffer in,
                 int idx = v - 3;
 
                 if(planet != -1 &&
-                    constellation.IsExtraVoice(v) && AnyPadActive())
-                    {
-                        constellationVoices[idx].active = true;
-                        constellationVoices[idx].frequency =
-                            padFrequencies[planet] * originRatio;
-                    }
-                    else
-                    {
-                        constellationVoices[idx].active = false;
-                    }
+                   constellation.IsExtraVoice(v) &&
+                   AnyPadActive())
+                {
+                    constellationVoices[idx].active = true;
 
-                constellationSig += ProcessPlanetConstellationVoice(
-                    constellationVoices[idx],
-                    constellationVoices[idx].frequency
-                );
+                    constellationVoices[idx].frequency =
+                        padFrequencies[planet] * originRatio;
+                }
+                else
+                {
+                    constellationVoices[idx].active = false;
+                }
+
+                constellationSig +=
+                    ProcessPlanetConstellationVoice(
+                        constellationVoices[idx],
+                        constellationVoices[idx].frequency
+                    );
 
                 continue;
             }
@@ -182,21 +274,31 @@ void AudioCallback(AudioHandle::InputBuffer in,
             if(planet != -1)
                 gate = padStates[planet];
 
-            planetSig += ProcessVoice(
-                voices[v],
-                gate,
-                filterMod,
-                oppositionProximity,
-                originRatio,
-                arcValue
-            );
+            planetSig +=
+                ProcessVoice(
+                    voices[v],
+                    gate,
+                    filterMod,
+                    aspect,
+                    originRatio,
+                    arcValue
+                );
         }
 
-        float sig = planetSig + constellationSig;
+        float sig =
+            planetSig + constellationSig;
 
         float drySig = sig;
 
-        CrystalStereo crystalSig = crystals.Process(sig, switches.A(), crystalAura, crystalRefraction, crystalRadiance, AnyPadActive());
+        CrystalStereo crystalSig =
+            crystals.Process(
+                sig,
+                switches.A(),
+                crystalAura,
+                crystalRefraction,
+                crystalRadiance,
+                AnyPadActive()
+            );
 
         float outputL =
             drySig * (1.0f - crystalWet)
@@ -211,15 +313,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
         outputL *= outputGain;
         outputR *= outputGain;
 
-        if(outputL > 0.95f)
-            outputL = 0.95f;
-        else if(outputL < -0.95f)
-            outputL = -0.95f;
-
-        if(outputR > 0.95f)
-            outputR = 0.95f;
-        else if(outputR < -0.95f)
-            outputR = -0.95f;
+        outputL = tanhf(outputL);
+        outputR = tanhf(outputR);
 
         out[0][i] = outputL;
         out[1][i] = outputR;
@@ -227,18 +322,15 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
     for(int i = 0; i < 7; i++)
     {
-        constellationVoiceWasActive[i] =
-            currentConstellationActive[i];
+        constellationVoiceWasActive[i] = currentConstellationActive[i];
     }
-
-    
 }
-// ACend
 
 int main()
 {
     hw.Configure();
     hw.Init();
+
     knobs.Init(hw);
 
     hw.SetLed(true);
@@ -247,24 +339,36 @@ int main()
 
     pads.Init();
     switches.Init();
-    float sampleRate = hw.AudioSampleRate();
+
+    float sampleRate =
+        hw.AudioSampleRate();
 
     crystals.Init(sampleRate);
 
     filterLfo.Init(sampleRate);
-    filterLfo.SetWaveform(Oscillator::WAVE_SIN);
+    filterLfo.SetWaveform(
+        Oscillator::WAVE_SIN
+    );
     filterLfo.SetFreq(0.08f);
     filterLfo.SetAmp(1.0f);
 
     reverbDelayL.Init();
     reverbDelayR.Init();
 
-    reverbDelayL.SetDelay(sampleRate * 0.31f);
-    reverbDelayR.SetDelay(sampleRate * 0.43f);
+    reverbDelayL.SetDelay(
+        sampleRate * 0.31f
+    );
+
+    reverbDelayR.SetDelay(
+        sampleRate * 0.43f
+    );
 
     for(int i = 0; i < 14; i++)
     {
-        InitVoice(voices[i], sampleRate);
+        InitVoice(
+            voices[i],
+            sampleRate
+        );
     }
 
     for(int i = 0; i < 7; i++)
@@ -275,12 +379,16 @@ int main()
         );
     }
 
-    // Inizializza la costellazione
-    // Initialize the constellation
-    constellation.Init(voices, padFrequencies);
+    constellation.Init(
+        voices,
+        padFrequencies
+    );
 
-    attackIncrement = 1.0f / (attackTime * sampleRate);
-    releaseIncrement = 1.0f / (releaseTime * sampleRate);
+    attackIncrement =
+        1.0f / (attackTime * sampleRate);
+
+    releaseIncrement =
+        1.0f / (releaseTime * sampleRate);
 
     pads.SetOnTouch(OnPadTouch);
     pads.SetOnRelease(OnPadRelease);

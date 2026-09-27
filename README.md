@@ -33,3 +33,6 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 
 - P01...P10 - **Planets** | Represent the 10 planetary bodies and determine the main planetary voices and their harmonic relationships
 - P11 - **Hold** | Sustains the selected planetary voices after releasing the corresponding pads
+
+<h3>LED Indicator</h3>
+The onboard LED lit when hold is active.
