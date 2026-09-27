@@ -8,7 +8,7 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 
 ## Controls
 
-<img src="images/touch_nuut.png" alt="NUUT" width="300">
+<img src="assets/touch_nuut.png" alt="NUUT" width="300">
 
 <h3>Switches</h3>
 
@@ -35,4 +35,4 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 - P11 - **Hold** | Sustains the selected planetary voices after releasing the corresponding pads
 
 <h3>LED Indicator</h3>
-The onboard LED lit when hold is active.
+The onboard LED lights up when Hold is active.
