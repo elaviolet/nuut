@@ -1,6 +1,8 @@
 # Project Name
 TARGET = nuut
 
+USE_DAISYSP_LGPL = 1
+
 # Sources
 CPP_SOURCES = nuut.cpp $(wildcard touch/*.cpp) $(wildcard nuut/*.cpp)
 

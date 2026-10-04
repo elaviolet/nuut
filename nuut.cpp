@@ -18,6 +18,8 @@ Voice voices[14];
 PlanetConstellationVoice constellationVoices[7];
 bool constellationVoiceWasActive[7] = {false};
 
+CombLP6BreathState combLP6Breath;
+
 constexpr size_t DELAY_SIZE = 24000;
 
 daisysp::DelayLine<float, DELAY_SIZE> reverbDelayL;
@@ -32,7 +34,6 @@ Crystals crystals;
 bool padStates[10] = {false};
 bool holdEnabled = false;
 
-Oscillator filterLfo;
 float transitPosition = 0.0f;
 
 bool AnyPadActive();
@@ -232,8 +233,7 @@ void AudioCallback(
 
     for(size_t i = 0; i < size; i++)
     {
-        float filterMod =
-            (filterLfo.Process() + 1.0f) * 0.5f;
+      
 
         float planetSig = 0.0f;
         float constellationSig = 0.0f;
@@ -278,15 +278,33 @@ void AudioCallback(
                 ProcessVoice(
                     voices[v],
                     gate,
-                    filterMod,
+                    0.0f,
                     aspect,
                     originRatio,
-                    arcValue
+                    arcValue,
+                    &combLP6Breath
                 );
         }
 
         float sig =
             planetSig + constellationSig;
+
+            // Global reverb
+            float reverbL = reverbDelayL.Read();
+            float reverbR = reverbDelayR.Read();
+
+            reverbDelayL.Write(
+                sig + reverbR * 0.35f
+            );
+
+            reverbDelayR.Write(
+                sig + reverbL * 0.35f
+            );
+
+            sig =
+                sig * 0.75f
+                + reverbL * 0.15f
+                + reverbR * 0.15f;
 
         float drySig = sig;
 
@@ -343,14 +361,11 @@ int main()
     float sampleRate =
         hw.AudioSampleRate();
 
+    InitCombLP6Breath(&combLP6Breath, sampleRate);
+
     crystals.Init(sampleRate);
 
-    filterLfo.Init(sampleRate);
-    filterLfo.SetWaveform(
-        Oscillator::WAVE_SIN
-    );
-    filterLfo.SetFreq(0.08f);
-    filterLfo.SetAmp(1.0f);
+   
 
     reverbDelayL.Init();
     reverbDelayR.Init();

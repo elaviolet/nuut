@@ -1,6 +1,7 @@
 #pragma once
 
 #include "daisysp.h"
+#include "Filters/comb.h"
 
 using namespace daisysp;
 
@@ -47,6 +48,83 @@ struct Voice
     float osc2BaseFrequency = 432.0f;
 };
 
+struct CombLP6BreathState
+{
+    Comb comb1;
+    Comb comb2;
+
+    Allpass allpass1;
+    Allpass allpass2;
+
+    Oscillator lfo1;
+    Oscillator lfo2;
+
+    float combBuffer1[2048];
+    float combBuffer2[2048];
+
+    float allpassBuffer1[512];
+    float allpassBuffer2[512];
+};
+
+inline void InitCombLP6Breath(
+    CombLP6BreathState* state,
+    float sampleRate)
+{
+    // COMB 1
+    state->comb1.Init(
+        sampleRate,
+        state->combBuffer1,
+        2048
+    );
+
+    state->comb1.SetRevTime(0.3f);
+    state->comb1.SetFreq(22.0f);
+
+    // COMB 2
+    state->comb2.Init(
+        sampleRate,
+        state->combBuffer2,
+        2048
+    );
+
+    state->comb2.SetRevTime(0.5);
+    state->comb2.SetFreq(77.0f);
+
+
+    // ALLPASS 1
+    state->allpass1.Init(
+        sampleRate,
+        state->allpassBuffer1,
+        512
+    );
+
+    state->allpass1.SetRevTime(0.5f);
+    state->allpass1.SetFreq(0.004f);
+
+
+    // ALLPASS 2
+    state->allpass2.Init(
+        sampleRate,
+        state->allpassBuffer2,
+        512
+    );
+
+    state->allpass2.SetRevTime(0.5f);
+    state->allpass2.SetFreq(0.006f);
+
+
+    // LFO 1 → Allpass 1
+    state->lfo1.Init(sampleRate);
+    state->lfo1.SetWaveform(Oscillator::WAVE_SIN);
+    state->lfo1.SetFreq(0.22f);
+    state->lfo1.SetAmp(0.5f);
+
+    // LFO 2 → Allpass 2
+    state->lfo2.Init(sampleRate);
+    state->lfo2.SetWaveform(Oscillator::WAVE_SIN);
+    state->lfo2.SetFreq(0.11f);
+    state->lfo2.SetAmp(1.0f);
+}
 
 // Extra planets
 struct PlanetConstellationVoice
@@ -116,7 +194,8 @@ inline float ProcessVoice(
     float filterMod,
     const AspectData& aspect,
     float originRatio,
-    float arcValue)
+    float arcValue,
+    CombLP6BreathState* state)
 {
     // Base harmonic structure
     float osc1Ratio = 0.5f;
@@ -213,12 +292,11 @@ inline float ProcessVoice(
     float sig2 = v.osc2.Process();
     float sig3 = v.osc3.Process();
 
-    float sig =
-        (sig1 + sig2 + sig3) * 0.25f;
+    float sig = (sig1 + sig2 + sig3) * 0.15f;
 
     // Envelope
     float attackTime =
-        0.005f + arcValue * 0.5f;
+    0.05f + arcValue * 1.5f;
 
     float releaseTime =
         0.1f + arcValue * 5.0f;
@@ -300,12 +378,60 @@ inline float ProcessVoice(
     if(filterFreq > 14000.0f)
         filterFreq = 14000.0f;
 
-    v.filter.SetFreq(filterFreq);
-    v.filter.Process(sig);
+    // Spectral breathe
+    // Two independent Comb + Allpass paths.
 
-    sig = v.filter.Low();
+    float lfo1 = state->lfo1.Process();
+    float lfo2 = state->lfo2.Process();
+
+
+    // Filter 1
+    // Allpass frequency modulation: ~0.03
+    float allpassTime1 =
+        0.004f * (1.0f + lfo1 * 0.03f);
+
+    state->allpass1.SetFreq(allpassTime1);
+
+    float comb1 =
+        state->comb1.Process(sig);
+
+    float ap1 =
+        state->allpass1.Process(comb1);
+
+
+    // Filter 2
+    // Allpass frequency modulation: ~0.06
+    float allpassTime2 =
+        0.007f * (1.0f + lfo2 * 0.07f);
+
+    state->allpass2.SetFreq(allpassTime2);
+
+    float comb2 =
+        state->comb2.Process(sig);
+
+    float ap2 =
+        state->allpass2.Process(comb2);
+
+
+    // Two separate Allpass amounts
+    float filter1 =
+        comb1 * 0.45f
+        + ap1 * 0.55f;
+
+    float filter2 =
+        comb2 * 0.77f
+        + ap2 * 0.23f;
+
+
+    // Combine the two filters
+    sig =
+        (filter1 * 0.5f
+        + filter2 * 0.5f) * 1.5f;
 
     return sig;
+
+ 
+
 }
 
 

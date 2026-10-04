@@ -67,7 +67,7 @@ CrystalStereo Crystals::Process(float input, int mode, float aura, float refract
         float delayed = crystalDelay.Read();
 
         crystalDelay.Write(
-            input + delayed * 0.45f
+            shimmer * 0.7f + delayed * 0.65f
         );
 
         float refractionAmount =
