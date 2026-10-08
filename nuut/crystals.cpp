@@ -23,7 +23,7 @@ void Crystals::Init(float sampleRate)
     crystalFilter.SetRes(0.4f);
 }
 
-CrystalStereo Crystals::Process(float input, int mode, float aura, float refraction, float radiance, bool active)
+CrystalStereo Crystals::Process(float input, int mode, float refraction, float radiance, bool active)
 {
     // Ametista
     if(mode == daisy::Switch3::POS_CENTER)
@@ -62,7 +62,7 @@ CrystalStereo Crystals::Process(float input, int mode, float aura, float refract
             sparkleEnvelope = 0.0f;
 
         float shimmerAmount =
-            0.35f + aura * 0.50f;
+            0.35f * 0.50f;
 
         float delayed = crystalDelay.Read();
 
@@ -107,7 +107,7 @@ CrystalStereo Crystals::Process(float input, int mode, float aura, float refract
         float movement = crystalLfo.Process();
 
         float targetDelayTime =
-            0.22f + movement * (0.012f + aura * 0.018f);
+            0.22f + movement * (0.012f  * 0.018f);
 
         aquamarineDelayTime +=
             (targetDelayTime - aquamarineDelayTime) * 0.002f;
@@ -120,7 +120,7 @@ CrystalStereo Crystals::Process(float input, int mode, float aura, float refract
 
         float feedback =
             0.28f
-            + aura * 0.20f
+             * 0.20f
             + radiance * 0.12f;
 
         crystalDelay.Write(
@@ -170,7 +170,7 @@ CrystalStereo Crystals::Process(float input, int mode, float aura, float refract
 
         float resonance =
             0.55f
-            + aura * 0.45f
+             * 0.45f
             + radiance * 0.25f;
 
         float leftEffect =

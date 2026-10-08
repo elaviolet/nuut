@@ -1,47 +1,75 @@
 #pragma once
 
 #include "voice.h"
+
 #include <cmath>
 
-struct PlanetOrbit
-{
-    float position = 0.0f;
-    float speed = 1.0f;
-};
+// ============================================================
+// CONSTELLATION VOICE STATE
+// Shared state for the seven extra constellation voices.
+//
+// These variables are accessed by nuut.cpp to process extra
+// voices and detect when a voice becomes active.
+// ============================================================
+
+PlanetConstellationVoice constellationVoices[7];
+
+bool constellationVoiceWasActive[7] = {false};
+
+// ============================================================
+// CONSTELLATION
+// Manages the relationship between selected planetary pads,
+// the three main voices, and the additional constellation voices.
+//
+// Main voices use indices 0–2.
+// Extra constellation voices use indices 3–9.
+// ============================================================
 
 class Constellation
 {
 public:
+
+    // --------------------------------------------------------
+    // INITIALIZATION
+    // Stores references to the main voice array and the
+    // planetary frequency table.
+    // --------------------------------------------------------
+
     void Init(Voice* voiceArray, const float* frequencies)
     {
         voices = voiceArray;
         padFrequencies = frequencies;
 
+        // Clear the initial assignments for the three main slots.
         for(int i = 0; i < 3; i++)
         {
             voicePad[i] = -1;
             mainPads[i] = -1;
             voiceIsExtra[i] = false;
         }
-
-       for(int i = 0; i < 10; i++)
-        {
-            planets[i].position = initialPlanetPositions[i];
-            planets[i].speed = 0.55f + i * 0.075f;
-        }
     }
+
+    // --------------------------------------------------------
+    // ASSIGN PLANET
+    // Assigns a touched pad to the first available main slot.
+    //
+    // Returns false if the pad is invalid, already assigned,
+    // or all three main slots are occupied.
+    // --------------------------------------------------------
 
     bool AssignPlanet(int pad)
     {
         if(pad < 0 || pad >= 10)
             return false;
 
+        // Do not assign the same main pad twice.
         for(int i = 0; i < 3; i++)
         {
             if(mainPads[i] == pad)
                 return false;
         }
 
+        // Find the first available main slot.
         for(int i = 0; i < 3; i++)
         {
             if(mainPads[i] == -1)
@@ -55,14 +83,22 @@ public:
         return false;
     }
 
+    // --------------------------------------------------------
+    // RELEASE PLANET
+    // Removes a pad from the main selection and updates
+    // the main voice assignments.
+    // --------------------------------------------------------
+
     void ReleasePlanet(int pad)
     {
+        // Remove the pad from the selected main pads.
         for(int i = 0; i < 3; i++)
         {
             if(mainPads[i] == pad)
                 mainPads[i] = -1;
         }
 
+        // Check whether any main pads remain selected.
         bool hasMainPad = false;
 
         for(int i = 0; i < 3; i++)
@@ -74,6 +110,7 @@ public:
             }
         }
 
+        // If no main pads remain, clear the main assignments.
         if(!hasMainPad)
         {
             for(int i = 0; i < 3; i++)
@@ -85,6 +122,7 @@ public:
             return;
         }
 
+        // Remove the released pad from any main voice slot.
         for(int i = 0; i < 3; i++)
         {
             if(voicePad[i] == pad)
@@ -94,12 +132,19 @@ public:
             }
         }
 
+        // Reclassify the remaining assigned voices.
         for(int i = 0; i < 3; i++)
         {
             if(voicePad[i] != -1)
                 voiceIsExtra[i] = !IsMainPad(voicePad[i]);
         }
     }
+
+    // --------------------------------------------------------
+    // GET PLANET
+    // Returns the pad assigned to a voice index.
+    // Returns -1 if the index is invalid or no pad is assigned.
+    // --------------------------------------------------------
 
     int GetPlanet(int voiceIndex)
     {
@@ -109,6 +154,12 @@ public:
         return voicePad[voiceIndex];
     }
 
+    // --------------------------------------------------------
+    // CHECK EXTRA VOICE
+    // Returns true if the specified voice is assigned to
+    // an additional constellation pad rather than a main pad.
+    // --------------------------------------------------------
+
     bool IsExtraVoice(int voiceIndex)
     {
         if(voiceIndex < 0 || voiceIndex >= 14)
@@ -116,6 +167,13 @@ public:
 
         return voiceIsExtra[voiceIndex];
     }
+
+    // --------------------------------------------------------
+    // SET CONSTELLATION AMOUNT
+    // Controls how many additional voices are assigned.
+    // Rebuilds the constellation only when the control changes
+    // by more than the existing threshold.
+    // --------------------------------------------------------
 
     void SetConstellation(float value)
     {
@@ -128,218 +186,41 @@ public:
         }
     }
 
-    void SetTransit(float value)
-    {
-        float transit = value * 360.0f;
-
-        for(int i = 0; i < 10; i++)
-        {
-            planets[i].position =
-                initialPlanetPositions[i] + transit * planets[i].speed;
-
-            while(planets[i].position >= 360.0f)
-                planets[i].position -= 360.0f;
-
-            while(planets[i].position < 0.0f)
-                planets[i].position += 360.0f;
-        }
-    }
-
-    float GetAngularDistance(float a, float b)
-    {
-        float distance = fabsf(a - b);
-
-        if(distance > 180.0f)
-            distance = 360.0f - distance;
-
-        return distance;
-    }
-
-     float GetPlanetPosition(int planet)
-    {
-        if(planet < 0 || planet >= 10)
-        return -1.0f;
-
-        return planets[planet].position;
-    }
-
-    int DetectAspect(float distance)
-    {
-        const float orb = 7.0f;
-
-        const float aspectAngles[5] =
-        {
-            0.0f,
-            60.0f,
-            90.0f,
-            120.0f,
-            180.0f
-        };
-
-        int bestAspect = -1;
-        float bestError = orb + 1.0f;
-
-        for(int i = 0; i < 5; i++)
-        {
-            float error = fabsf(distance - aspectAngles[i]);
-
-            if(error <= orb && error < bestError)
-            {
-                bestAspect = i;
-                bestError = error;
-            }
-        }
-
-        return bestAspect;
-    }
-
-    float GetAspectProximity(float distance, int aspect)
-    {
-        if(aspect < 0 || aspect >= 5)
-            return 0.0f;
-
-        const float orb = 7.0f;
-
-        const float aspectAngles[5] =
-        {
-            0.0f,
-            60.0f,
-            90.0f,
-            120.0f,
-            180.0f
-        };
-
-        float error = fabsf(distance - aspectAngles[aspect]);
-
-        if(error >= orb)
-            return 0.0f;
-
-        return 1.0f - (error / orb);
-    }
-
-    int CheckAspect(int planetA, int planetB)
-    {
-        if(planetA < 0 || planetA >= 10 ||
-        planetB < 0 || planetB >= 10)
-            return -1;
-
-        float distance = GetAngularDistance(
-            planets[planetA].position,
-            planets[planetB].position
-        );
-
-        return DetectAspect(distance);
-    }
-
-    int GetAspectPlanet(int index)
-    {
-        if(index < 0 || index >= 3)
-            return -1;
-
-        return mainPads[index];
-    }
-
-    int FindAspect(int& planetA, int& planetB, float& distance)
-    {
-        planetA = -1;
-        planetB = -1;
-        distance = 0.0f;
-
-        for(int i = 0; i < 3; i++)
-        {
-            int a = GetAspectPlanet(i);
-
-            if(a == -1)
-                continue;
-
-            for(int j = i + 1; j < 3; j++)
-            {
-                int b = GetAspectPlanet(j);
-
-                if(b == -1)
-                    continue;
-
-                float angularDistance = GetAngularDistance(
-                    planets[a].position,
-                    planets[b].position
-                );
-
-                int aspect = DetectAspect(angularDistance);
-
-                if(aspect != -1)
-                {
-                    planetA = a;
-                    planetB = b;
-                    distance = angularDistance;
-                    return aspect;
-                }
-            }
-        }
-
-        return -1;
-    }
-
-    bool FindOpposition(int& planetA, int& planetB, float& proximity)
-    {
-        planetA = -1;
-        planetB = -1;
-        proximity = 0.0f;
-
-        for(int i = 0; i < 3; i++)
-        {
-            int a = GetAspectPlanet(i);
-
-            if(a == -1)
-                continue;
-
-            for(int j = i + 1; j < 3; j++)
-            {
-                int b = GetAspectPlanet(j);
-
-                if(b == -1)
-                    continue;
-
-                float distance = GetAngularDistance(
-                    planets[a].position,
-                    planets[b].position
-                );
-
-                int aspect = DetectAspect(distance);
-
-                if(aspect == 4)
-                {
-                    planetA = a;
-                    planetB = b;
-                    proximity = GetAspectProximity(distance, aspect);
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
 private:
+
+    // Reference to the main planetary voice array.
     Voice* voices = nullptr;
+
+    // Frequencies associated with the ten planetary pads.
     const float* padFrequencies = nullptr;
 
-    PlanetOrbit planets[10];
-
+    // Pad assigned to each of the fourteen voice slots.
+    // -1 means that the slot has no assigned pad.
     int voicePad[14] =
     {
         -1, -1, -1, -1, -1, -1, -1,
         -1, -1, -1, -1, -1, -1, -1
     };
+
+    // The three pads explicitly selected by the user.
     int mainPads[3] = {-1, -1, -1};
+
+    // Identifies voice slots assigned to constellation extras.
     bool voiceIsExtra[14] =
     {
         false, false, false, false, false, false, false,
         false, false, false, false, false, false, false
     };
-    float transitMultiplier = 1.0f;
-    float lastAppliedMultiplier = 1.0f;
+
+    // Current and previous constellation control values.
     float constellationAmount = 0.0f;
     float lastConstellationAmount = -1.0f;
+
+    // --------------------------------------------------------
+    // CHECK MAIN PAD
+    // Returns true if the pad is one of the three selected
+    // main pads.
+    // --------------------------------------------------------
 
     bool IsMainPad(int pad)
     {
@@ -352,6 +233,12 @@ private:
         return false;
     }
 
+    // --------------------------------------------------------
+    // CHECK PAD USAGE
+    // Returns true if a pad is already assigned to any
+    // voice slot.
+    // --------------------------------------------------------
+
     bool IsUsed(int pad)
     {
         for(int i = 0; i < 14; i++)
@@ -362,6 +249,12 @@ private:
 
         return false;
     }
+
+    // --------------------------------------------------------
+    // FIND CLOSEST AVAILABLE PAD
+    // Finds the unused pad whose frequency is closest to
+    // the requested target frequency.
+    // --------------------------------------------------------
 
     int FindClosestPad(float targetFrequency)
     {
@@ -386,11 +279,25 @@ private:
         return bestPad;
     }
 
+    // --------------------------------------------------------
+    // REBUILD CONSTELLATION
+    // Recalculates the three main voice assignments and
+    // assigns additional voices according to the control value.
+    //
+    // With one main pad, it searches for frequencies near
+    // 1.5x and 2x the root frequency.
+    //
+    // With two main pads, it searches near their geometric mean.
+    //
+    // Additional voices are then assigned from unused pads.
+    // --------------------------------------------------------
+
     void RebuildConstellation()
     {
         int desiredPads[3] = {-1, -1, -1};
         int desiredCount = 0;
 
+        // Collect the pads explicitly selected by the user.
         for(int i = 0; i < 3; i++)
         {
             if(mainPads[i] != -1)
@@ -399,6 +306,11 @@ private:
                 desiredCount++;
             }
         }
+
+        // ----------------------------------------------------
+        // GENERATE HARMONIC COMPANIONS
+        // One selected pad can generate up to two companions.
+        // ----------------------------------------------------
 
         if(desiredCount == 1)
         {
@@ -421,24 +333,32 @@ private:
             }
         }
         else if(desiredCount == 2)
+        {
+            float frequency1 = padFrequencies[desiredPads[0]];
+            float frequency2 = padFrequencies[desiredPads[1]];
+
+            float targetFrequency =
+                std::sqrt(frequency1 * frequency2);
+
+            int extra = FindClosestPad(targetFrequency);
+
+            if(extra != -1)
             {
-                float frequency1 = padFrequencies[desiredPads[0]];
-                float frequency2 = padFrequencies[desiredPads[1]];
-
-                float targetFrequency = std::sqrt(frequency1 * frequency2);
-
-               int extra = FindClosestPad(targetFrequency);
-
-                if(extra != -1)
-                {
-                    desiredPads[desiredCount] = extra;
-                    desiredCount++;
-                }
+                desiredPads[desiredCount] = extra;
+                desiredCount++;
+            }
         }
+
+        // ----------------------------------------------------
+        // PRESERVE EXISTING VOICE ASSIGNMENTS
+        // Keep pads in their current voice slots whenever
+        // possible, reducing unnecessary reassignment.
+        // ----------------------------------------------------
 
         int newVoicePad[3] = {-1, -1, -1};
         bool assigned[3] = {false, false, false};
 
+        // Preserve assignments that are still required.
         for(int i = 0; i < 3; i++)
         {
             for(int j = 0; j < desiredCount; j++)
@@ -452,6 +372,7 @@ private:
             }
         }
 
+        // Fill empty voice slots with remaining desired pads.
         for(int i = 0; i < 3; i++)
         {
             if(newVoicePad[i] != -1)
@@ -468,6 +389,7 @@ private:
             }
         }
 
+        // Apply the updated main voice assignments.
         for(int i = 0; i < 3; i++)
         {
             bool changed = voicePad[i] != newVoicePad[i];
@@ -477,104 +399,66 @@ private:
             voiceIsExtra[i] =
                 voicePad[i] != -1 && !IsMainPad(voicePad[i]);
 
+            // Update the voice frequency only when its pad changes.
             if(changed && voicePad[i] != -1)
                 ConfigureVoice(i, voicePad[i]);
         }
 
+        // ----------------------------------------------------
+        // CLEAR PREVIOUS EXTRA ASSIGNMENTS
+        // Extra slots are rebuilt from the current constellation
+        // amount on every rebuild.
+        // ----------------------------------------------------
 
-            for(int i = 3; i < 14; i++)
-            {
-                voicePad[i] = -1;
-                voiceIsExtra[i] = false;
-            }
+        for(int i = 3; i < 14; i++)
+        {
+            voicePad[i] = -1;
+            voiceIsExtra[i] = false;
+        }
 
-            if(constellationAmount <= 0.0f)
+        if(constellationAmount <= 0.0f)
             return;
 
-            int extraVoiceCount =
-                static_cast<int>(constellationAmount * 7.0f);
+        // Map the control value to a maximum of seven extra voices.
+        int extraVoiceCount =
+            static_cast<int>(constellationAmount * 7.0f);
 
-            int extraVoiceIndex = 3;
-            int addedVoices = 0;
+        int extraVoiceIndex = 3;
+        int addedVoices = 0;
 
-            for(int pad = 0; pad < 10 && extraVoiceIndex < 10; pad++)
-            {
-                if(IsUsed(pad))
-                    continue;
+        // Assign unused pads to extra voice slots 3–9.
+        for(int pad = 0; pad < 10 && extraVoiceIndex < 10; pad++)
+        {
+            if(IsUsed(pad))
+                continue;
 
-                if(addedVoices >= extraVoiceCount)
-                    break;
+            if(addedVoices >= extraVoiceCount)
+                break;
 
-                voicePad[extraVoiceIndex] = pad;
-                voiceIsExtra[extraVoiceIndex] = true;
+            voicePad[extraVoiceIndex] = pad;
+            voiceIsExtra[extraVoiceIndex] = true;
 
-                ConfigureVoice(extraVoiceIndex, pad);
+            ConfigureVoice(extraVoiceIndex, pad);
 
-
-                extraVoiceIndex++;
-                addedVoices++;
-            }
+            extraVoiceIndex++;
+            addedVoices++;
+        }
     }
+
+    // --------------------------------------------------------
+    // CONFIGURE VOICE
+    // Updates the stored frequency for a voice using the
+    // frequency associated with its assigned pad.
+    // --------------------------------------------------------
 
     void ConfigureVoice(int voiceIndex, int pad)
     {
-        float baseFreq = padFrequencies[pad];
-
-        voices[voiceIndex].frequency = baseFreq;
-
-        if(voiceIndex == 0)
+        if(voiceIndex < 0 || voiceIndex >= 14 ||
+           pad < 0 || pad >= 10)
         {
-            voices[voiceIndex].osc1.SetFreq(baseFreq);
-            voices[voiceIndex].osc2.SetFreq(baseFreq * 2.0f);
-            voices[voiceIndex].osc2BaseFrequency = baseFreq * 2.0f;
-            voices[voiceIndex].osc3.SetFreq(baseFreq * 3.0f);
+            return;
         }
-        else if(voiceIndex == 1)
-        {
-            voices[voiceIndex].osc1.SetFreq(baseFreq * 1.5f);
-            voices[voiceIndex].osc2.SetFreq(baseFreq * 3.0f);
-            voices[voiceIndex].osc2BaseFrequency = baseFreq * 3.0f;
-            voices[voiceIndex].osc3.SetFreq(baseFreq * 4.5f);
-        }
-        else if(voiceIndex == 2)
-        {
-            voices[voiceIndex].osc1.SetFreq(baseFreq * 2.0f);
-            voices[voiceIndex].osc2.SetFreq(baseFreq * 4.0f);
-            voices[voiceIndex].osc2BaseFrequency = baseFreq * 4.0f;
-            voices[voiceIndex].osc3.SetFreq(baseFreq * 6.0f);
-        }
-    }
 
-    void ConfigureVoiceWithMultiplier(
-    int voiceIndex,
-    int pad,
-    float multiplier
-    )
-    {
-    float baseFreq = padFrequencies[pad] * multiplier;
-
-    voices[voiceIndex].frequency = baseFreq;
-
-    if(voiceIndex == 0)
-    {
-        voices[voiceIndex].osc1.SetFreq(baseFreq);
-        voices[voiceIndex].osc2.SetFreq(baseFreq * 2.0f);
-        voices[voiceIndex].osc2BaseFrequency = baseFreq * 2.0f;
-        voices[voiceIndex].osc3.SetFreq(baseFreq * 3.0f);
-    }
-    else if(voiceIndex == 1)
-    {
-        voices[voiceIndex].osc1.SetFreq(baseFreq * 1.5f);
-        voices[voiceIndex].osc2.SetFreq(baseFreq * 3.0f);
-        voices[voiceIndex].osc2BaseFrequency = baseFreq * 3.0f;
-        voices[voiceIndex].osc3.SetFreq(baseFreq * 4.5f);
-    }
-    else if(voiceIndex == 2)
-    {
-        voices[voiceIndex].osc1.SetFreq(baseFreq * 2.0f);
-        voices[voiceIndex].osc2.SetFreq(baseFreq * 4.0f);
-        voices[voiceIndex].osc2BaseFrequency = baseFreq * 4.0f;
-        voices[voiceIndex].osc3.SetFreq(baseFreq * 6.0f);
-    }
+        voices[voiceIndex].frequency = padFrequencies[pad];
     }
 };
