@@ -30,74 +30,14 @@ CrystalStereo Crystals::Process(float input, int mode, float refraction, float r
     {
         float shimmer = crystalShifter.Process(input);
 
-        // radiance sparkles
-        sparkleCounter++;
+        constexpr float AMETHYST_LEVEL = 0.5f;
+        float shimmerAmount = 0.35f;
 
-        if(radiance > 0.05f && sparkleCounter > 1800 && active)
-        {
-            sparkleRandom =
-                sparkleRandom * 1664525u + 1013904223u;
-
-            uint32_t chance = sparkleRandom % 100;
-
-            if(chance < static_cast<uint32_t>(radiance * 35.0f))
-            {
-                sparkleEnvelope = 0.85f;
-
-                chimePan =
-                    (static_cast<float>(sparkleRandom % 200) / 100.0f) - 1.0f;
-            }
-
-            sparkleCounter = 0;
-        }
-
-        float chime =
-            (crystalChime.Process()
-            + crystalChimeHigh.Process())
-            * sparkleEnvelope;
-
-        sparkleEnvelope *= 0.99995f;
-
-        if(sparkleEnvelope < 0.001f)
-            sparkleEnvelope = 0.0f;
-
-        float shimmerAmount =
-            0.35f * 0.50f;
-
-        float delayed = crystalDelay.Read();
-
-        crystalDelay.Write(
-            shimmer * 0.7f + delayed * 0.65f
-        );
-
-        float refractionAmount =
-            refraction * 0.5f;
-
-        float chimeAmount =
-            chime * radiance * 0.045f;
-
-        float panAmount =
-            chimePan * refraction;
-
-        float chimeLeft =
-            chimeAmount * (1.0f - panAmount);
-
-        float chimeRight =
-            chimeAmount * (1.0f + panAmount);
-
-        float leftEffect =
-            shimmer * (shimmerAmount + refractionAmount)
-            + delayed * (0.25f - refractionAmount * 0.5f)
-            + chimeLeft;
-
-        float rightEffect =
-            shimmer * (shimmerAmount - refractionAmount * 0.5f)
-            + delayed * (0.25f + refractionAmount)
-            + chimeRight;
+        float effect = shimmer * shimmerAmount * AMETHYST_LEVEL;
 
         return {
-            input + leftEffect,
-            input + rightEffect
+            input + effect,
+            input + effect
         };
     }
 

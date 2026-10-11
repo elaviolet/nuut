@@ -3,11 +3,48 @@
 
 #include "daisysp.h"
 #include "transit.h"
+#include "resonator.h"
 
 #include <cmath>
 #include <cstddef>
 
 using namespace daisysp;
+
+// ============================================================
+// SINE WAVETABLE
+// ============================================================
+
+constexpr int NUUT_WAVETABLE_SIZE = 2048;
+
+struct NUUTSineWavetable
+{
+    float table[NUUT_WAVETABLE_SIZE + 1];
+};
+
+inline NUUTSineWavetable nuutSineTable;
+
+inline void InitNUUTSineWavetable()
+{
+    for(int i = 0; i <= NUUT_WAVETABLE_SIZE; ++i)
+    {
+        nuutSineTable.table[i] =
+            sinf(TWOPI_F * static_cast<float>(i)
+                 / static_cast<float>(NUUT_WAVETABLE_SIZE));
+    }
+}
+
+inline float NUUTSine(float phase)
+{
+    phase -= floorf(phase);
+
+    float index = phase * NUUT_WAVETABLE_SIZE;
+    int i = static_cast<int>(index);
+    float frac = index - static_cast<float>(i);
+
+    return nuutSineTable.table[i]
+         + frac * (nuutSineTable.table[i + 1]
+         - nuutSineTable.table[i]);
+}
 
 // ============================================================
 // HARMONIC AMPLITUDES
@@ -68,7 +105,7 @@ inline float ProcessNUUTHarmonicRenderer(
         float phase = renderer->phase[i] + phases[i];
         phase -= floorf(phase);
 
-        out += sinf(phase * TWOPI_F) * amplitudes[i];
+        out += NUUTSine(phase) * amplitudes[i];
     }
 
     return out;
@@ -78,9 +115,11 @@ inline float ProcessNUUTHarmonicRenderer(
 // MAIN VOICE
 // ============================================================
 
-struct Voice
-{
+struct Voice {
     NUUTHarmonicRenderer harmonicRenderer;
+    NUUTModalResonator resonator;
+    WhiteNoise noise;
+    Svf noiseFilter;
 
     float envelope = 0.0f;
     float frequency = 432.0f;
@@ -93,6 +132,8 @@ struct Voice
 struct CombLP6BreathState
 {
     Oscillator lfo2;
+    Comb comb;
+    float combBuffer[2048];
 };
 
 inline void InitCombLP6Breath(
@@ -121,6 +162,7 @@ struct PlanetConstellationVoice
     bool triggered = false;
 
     float frequency = 432.0f;
+    float targetFrequency = 432.0f;
 };
 
 // ============================================================
@@ -130,6 +172,14 @@ struct PlanetConstellationVoice
 inline void InitVoice(Voice& voice, float sampleRate)
 {
     InitNUUTHarmonicRenderer(voice.harmonicRenderer);
+    InitNUUTModalResonator(&voice.resonator, sampleRate);
+
+    voice.noise.Init();
+    voice.noise.SetAmp(1.0f);
+
+    voice.noiseFilter.Init(48000.0f);
+    voice.noiseFilter.SetFreq(2500.0f);
+    voice.noiseFilter.SetRes(0.2f);
 
     voice.envelope = 0.0f;
     voice.frequency = 432.0f;
@@ -155,6 +205,7 @@ inline void InitPlanetConstellationVoice(
     voice.triggered = false;
 
     voice.frequency = 432.0f;
+    voice.targetFrequency = 432.0f;
 }
 
 // ============================================================
@@ -173,8 +224,10 @@ inline float ProcessVoice(
 {
     const float frequency = voice->frequency * originRatio;
 
-    float harmonicAmps[8];
-    BuildNUUTHarmonics(harmonicAmps);
+    static const float harmonicAmps[8] = {
+        0.40f, 0.04f, 0.015f, 0.010f,
+        0.006f, 0.003f, 0.0015f, 0.0f
+    };
 
     float phases[7];
 
@@ -194,37 +247,22 @@ inline float ProcessVoice(
         alchemy,
         48000.0f);
 
+    // Crystal Modal Resonator
+    sig = ProcessNUUTModalResonator(
+            &voice->resonator,
+            sig,
+            frequency
+    );
+
     sig *= 0.57f;
 
-    // Chorus: intentionally retains the original shared buffer.
-    const float chorusLfo = state->lfo2.Process();
-
-    static float chorusBuffer[1024] = {};
-    static std::size_t chorusIndex = 0;
-
-    const float delayMs = 14.0f + chorusLfo * 3.0f;
-    const float delaySamples = delayMs * 48.0f;
-
-    float readPos = static_cast<float>(chorusIndex) - delaySamples;
-
-    while(readPos < 0.0f)
-        readPos += 1024.0f;
-
-    const int index1 = static_cast<int>(readPos);
-    const int index2 = (index1 + 1) & 1023;
-    const float frac = readPos - static_cast<float>(index1);
-
-    const float delayed =
-        chorusBuffer[index1] * (1.0f - frac)
-        + chorusBuffer[index2] * frac;
-
-    chorusBuffer[chorusIndex] = sig;
-    chorusIndex = (chorusIndex + 1) & 1023;
-
-    sig = sig * 0.70f + delayed * 0.30f;
+    voice->noiseFilter.Process(voice->noise.Process());
+    const float breathLevel = 0.003f * voice->envelope;
+    const float breath = voice->noiseFilter.Low() * breathLevel;
+    sig += breath;
 
     // Envelope
-    const float attackTime = 0.12f + arcValue * 0.4f;
+    const float attackTime = 2.2f + arcValue * 4.4f;
     const float releaseTime = 0.8f + arcValue * 2.0f;
 
     const float attackInc = 1.0f / (attackTime * 48000.0f);
@@ -252,9 +290,10 @@ inline float ProcessVoice(
 // EXTRA CONSTELLATION VOICE PROCESSING
 // ============================================================
 
+
 inline float ProcessPlanetConstellationVoice(
     PlanetConstellationVoice* voice,
-    float frequency)
+    float targetFrequency)
 {
     const float attackIncrement = 1.0f / (0.03f * 48000.0f);
     const float releaseIncrement = 1.0f / (0.30f * 48000.0f);
@@ -275,8 +314,12 @@ inline float ProcessPlanetConstellationVoice(
             voice->envelope = 0.0f;
     }
 
+    // Smooth frequency transition
+    voice->frequency +=
+        (targetFrequency - voice->frequency) * 0.001f;
+
     // Oscillator
-    voice->osc.SetFreq(frequency);
+    voice->osc.SetFreq(voice->frequency);
 
     float sig = voice->osc.Process();
 

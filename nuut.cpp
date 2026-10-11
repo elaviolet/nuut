@@ -307,7 +307,7 @@ void AudioCallback(
                 {
                     constellationVoices[idx].active = true;
 
-                    constellationVoices[idx].frequency =
+                    constellationVoices[idx].targetFrequency =
                         padFrequencies[planet] * originRatio;
                 }
                 else
@@ -317,7 +317,7 @@ void AudioCallback(
 
                 constellationSig += ProcessPlanetConstellationVoice(
                     &constellationVoices[idx],
-                    constellationVoices[idx].frequency
+                    constellationVoices[idx].targetFrequency
                 );
 
                 continue;
@@ -452,22 +452,12 @@ int main()
     transit.Init();
 
     float sampleRate = hw.AudioSampleRate();
+    InitNUUTSineWavetable();
 
 
     InitCombLP6Breath(&combLP6Breath, sampleRate);
 
     crystals.Init(sampleRate);
-
-    reverbDelayL.Init();
-    reverbDelayR.Init();
-
-    reverbDelayL.SetDelay(
-        sampleRate * 0.31f
-    );
-
-    reverbDelayR.SetDelay(
-        sampleRate * 0.43f
-    );
 
     // Initialize all main voices.
     for(int i = 0; i < 14; i++)
