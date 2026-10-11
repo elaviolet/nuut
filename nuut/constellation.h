@@ -35,10 +35,10 @@ public:
     // planetary frequency table.
     // --------------------------------------------------------
 
-    void Init(Voice* voiceArray, const float* frequencies)
+    void Init(Voice* voiceArray)
     {
         voices = voiceArray;
-        padFrequencies = frequencies;
+        
 
         // Clear the initial assignments for the three main slots.
         for(int i = 0; i < 3; i++)
@@ -191,8 +191,7 @@ private:
     // Reference to the main planetary voice array.
     Voice* voices = nullptr;
 
-    // Frequencies associated with the ten planetary pads.
-    const float* padFrequencies = nullptr;
+   
 
     // Pad assigned to each of the fourteen voice slots.
     // -1 means that the slot has no assigned pad.
@@ -267,7 +266,7 @@ private:
                 continue;
 
             float distance =
-                std::fabs(padFrequencies[pad] - targetFrequency);
+                std::fabs(planets[pad].frequency - targetFrequency);
 
             if(distance < bestDistance)
             {
@@ -314,7 +313,7 @@ private:
 
         if(desiredCount == 1)
         {
-            float root = padFrequencies[desiredPads[0]];
+            float root = planets[desiredPads[0]].frequency;
 
             int extra1 = FindClosestPad(root * 1.5f);
 
@@ -334,8 +333,8 @@ private:
         }
         else if(desiredCount == 2)
         {
-            float frequency1 = padFrequencies[desiredPads[0]];
-            float frequency2 = padFrequencies[desiredPads[1]];
+            float frequency1 = planets[desiredPads[0]].frequency;
+            float frequency2 = planets[desiredPads[1]].frequency;
 
             float targetFrequency =
                 std::sqrt(frequency1 * frequency2);
@@ -459,6 +458,6 @@ private:
             return;
         }
 
-        voices[voiceIndex].frequency = padFrequencies[pad];
+        voices[voiceIndex].frequency = planets[pad].frequency;
     }
 };

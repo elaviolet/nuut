@@ -13,7 +13,13 @@ class Crystals
 {
 public:
     void Init(float sampleRate);
-    CrystalStereo Process(float input, int mode, float refraction, float radiance, bool active);
+    CrystalStereo Process(
+        float input,
+        int mode,
+        float refraction,
+        float radiance,
+        bool active
+    );
 
 private:
     daisysp::DelayLine<float, 24000> crystalDelay;
@@ -22,10 +28,12 @@ private:
     daisysp::Oscillator crystalChime;
     daisysp::Oscillator crystalChimeHigh;
     daisysp::Svf crystalFilter;
-    
-    float aquamarineDelayTime = 0.18f;
-    float pingPongLeft = 0.0f;
-    float pingPongRight = 0.0f;
+    daisysp::Svf aquamarineNoiseFilter;
+    daisysp::WhiteNoise aquamarineNoise;
+
+    float sampleRate = 48000.0f;
+    float aquamarineDelayTime = 0.04f;
+
     float sparkleEnvelope = 0.0f;
     uint32_t sparkleCounter = 0;
     uint32_t sparkleRandom = 1234567;

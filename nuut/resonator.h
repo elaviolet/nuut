@@ -87,10 +87,20 @@ inline float ProcessNUUTModalResonator(
         0.053f
     };
 
+    constexpr float MODE_WEIGHTS[NUUTModalResonator::MODE_COUNT] =
+    {
+        1.00f,
+        0.80f,
+        0.60f,
+        0.42f,
+        0.28f,
+        0.18f
+    };
+
     constexpr float TWO_PI = 6.28318530718f;
     constexpr float RADIUS = 0.97f;
-    constexpr float MODE_GAIN = 0.025f;
-    constexpr float WET_MIX = 0.10f;
+    constexpr float MODE_GAIN = 0.05f;
+    constexpr float WET_MIX = 0.20f;
 
     const float sr = resonator->sampleRate;
 
@@ -160,10 +170,10 @@ inline float ProcessNUUTModalResonator(
         resonator->y2[i] = resonator->y1[i];
         resonator->y1[i] = y;
 
-        modalOutput += y * MODE_GAIN;
+        modalOutput += y * MODE_GAIN * MODE_WEIGHTS[i];
     }
 
     // Conservative parallel blend: retain the original
     // signal and add a restrained crystalline resonance.
-    return input;
+    return input + modalOutput * WET_MIX;
 }

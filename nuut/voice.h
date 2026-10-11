@@ -86,7 +86,7 @@ inline float ProcessNUUTHarmonicRenderer(
     float sampleRate)
 {
     float out = 0.0f;
-    const float inharmonicity = alchemy * 0.12f;
+    const float inharmonicity = 0.0f;
 
     for(int i = 0; i < 7; ++i)
     {
@@ -118,8 +118,9 @@ inline float ProcessNUUTHarmonicRenderer(
 struct Voice {
     NUUTHarmonicRenderer harmonicRenderer;
     NUUTModalResonator resonator;
-    WhiteNoise noise;
-    Svf noiseFilter;
+
+    Svf alchemyFilter;
+    float alchemyLfoPhase = 0.0f;
 
     float envelope = 0.0f;
     float frequency = 432.0f;
@@ -169,21 +170,21 @@ struct PlanetConstellationVoice
 // INITIALIZATION
 // ============================================================
 
-inline void InitVoice(Voice& voice, float sampleRate)
+
+inline void InitVoice(Voice* voice, float sampleRate)
 {
-    InitNUUTHarmonicRenderer(voice.harmonicRenderer);
-    InitNUUTModalResonator(&voice.resonator, sampleRate);
+    InitNUUTHarmonicRenderer(voice->harmonicRenderer);
+    InitNUUTModalResonator(&voice->resonator, sampleRate);
 
-    voice.noise.Init();
-    voice.noise.SetAmp(1.0f);
+    voice->alchemyFilter.Init(sampleRate);
+    voice->alchemyFilter.SetFreq(2000.0f);
+    voice->alchemyFilter.SetRes(0.2f);
+    voice->alchemyLfoPhase = 0.0f;
 
-    voice.noiseFilter.Init(48000.0f);
-    voice.noiseFilter.SetFreq(2500.0f);
-    voice.noiseFilter.SetRes(0.2f);
-
-    voice.envelope = 0.0f;
-    voice.frequency = 432.0f;
+    voice->envelope = 0.0f;
+    voice->frequency = 432.0f;
 }
+
 
 inline void InitPlanetConstellationVoice(
     PlanetConstellationVoice& voice,
@@ -224,20 +225,28 @@ inline float ProcessVoice(
 {
     const float frequency = voice->frequency * originRatio;
 
-    static const float harmonicAmps[8] = {
-        0.40f, 0.04f, 0.015f, 0.010f,
-        0.006f, 0.003f, 0.0015f, 0.0f
+    const float a = fmaxf(0.0f, fminf(1.0f, alchemy));
+
+    const float harmonicAmps[8] = {
+        0.40f,
+        0.04f  + a * 0.025f,
+        0.015f + a * 0.020f,
+        0.010f + a * 0.018f,
+        0.006f + a * 0.014f,
+        0.003f + a * 0.010f,
+        0.0015f + a * 0.007f,
+        0.0f
     };
 
     float phases[7];
 
     phases[0] = 0.0f;
-    phases[1] = 0.05f * alchemy;
-    phases[2] = 0.17f * alchemy;
-    phases[3] = 0.31f * alchemy;
-    phases[4] = 0.48f * alchemy;
-    phases[5] = 0.66f * alchemy;
-    phases[6] = 0.82f * alchemy;
+    phases[1] = 0.12f * alchemy;
+    phases[2] = 0.30f * alchemy;
+    phases[3] = 0.50f * alchemy;
+    phases[4] = 0.75f * alchemy;
+    phases[5] = 1.00f * alchemy;
+    phases[6] = 1.30f * alchemy;
 
     float sig = ProcessNUUTHarmonicRenderer(
         &voice->harmonicRenderer,
@@ -254,16 +263,14 @@ inline float ProcessVoice(
             frequency
     );
 
-    sig *= 0.57f;
+    sig *= 0.45f;
 
-    voice->noiseFilter.Process(voice->noise.Process());
-    const float breathLevel = 0.003f * voice->envelope;
-    const float breath = voice->noiseFilter.Low() * breathLevel;
-    sig += breath;
+    //Alchemy +
+ 
 
     // Envelope
-    const float attackTime = 2.2f + arcValue * 4.4f;
-    const float releaseTime = 0.8f + arcValue * 2.0f;
+    const float attackTime = 5.0f + arcValue * 7.0f;
+    const float releaseTime = 2.0f + arcValue * 4.0f;
 
     const float attackInc = 1.0f / (attackTime * 48000.0f);
     const float releaseInc = 1.0f / (releaseTime * 48000.0f);
