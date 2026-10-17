@@ -21,9 +21,7 @@ Voice voices[14];
 CombLP6BreathState combLP6Breath;
 
 // Global stereo delay used for the main reverb.
-constexpr size_t DELAY_SIZE = 24000;
-daisysp::DelayLine<float, DELAY_SIZE> reverbDelayL;
-daisysp::DelayLine<float, DELAY_SIZE> reverbDelayR;
+DSY_SDRAM_BSS daisysp::ReverbSc reverb;
 
 Pads pads;
 Knobs knobs;
@@ -44,15 +42,21 @@ bool padStates[10] = {false};
 
 bool holdEnabled = false;
 float transitPosition = 0.0f;
+
 constexpr int MELODY_LENGTH = 5;
 float melodyNotes[MELODY_LENGTH] = {};
+
 int melodyStep = 0;
+int melodyLength = 5;
+
 int melodyLastAspect = ASPECT_NONE;
 int melodyLastA = -1;
 int melodyLastB = -1;
+
 size_t melodySamplesUntilNext = 0;
 float melodyCurrentFrequency = 432.0f;
 bool melodyActive = false;
+
 bool AnyPadActive();
 
 // ============================================================
@@ -161,7 +165,7 @@ void AudioCallback(
        // PRIMARY CONTROLS
        // --------------------------------------------------------
        float originValue = knobs.s31().Process();
-       float arcValue = knobs.s32().Process();
+       float arcValue = knobs.s33().Process();
        // --------------------------------------------------------
        // TRANSIT CONTROL
        // The center switch position provides manual control.
@@ -223,99 +227,131 @@ void AudioCallback(
 
        // --------------------------------------------------------
        // MELODY GENERATION
-       // Build a five-note phrase when the detected aspect changes.
+       // Build a note phrase when the detected aspect changes.
+       // --------------------------------------------------------
        // --------------------------------------------------------
 
-       if(currentAspect != ASPECT_NONE && aspectA >= 0 && aspectB >= 0)
-       {
-           float melodyFrequencyA = planets[aspectA].frequency;
-           float melodyFrequencyB = planets[aspectB].frequency;
-           // Keep both planetary pitches in a useful register.
-           while(melodyFrequencyA < 220.0f)
-               melodyFrequencyA *= 2.0f;
-           while(melodyFrequencyA > 880.0f)
-               melodyFrequencyA *= 0.5f;
-           while(melodyFrequencyB < 220.0f)
-               melodyFrequencyB *= 2.0f;
-           while(melodyFrequencyB > 880.0f)
-               melodyFrequencyB *= 0.5f;
-           if(!melodyActive ||
-              currentAspect != melodyLastAspect ||
-              aspectA != melodyLastA ||
-              aspectB != melodyLastB)
-           {
-               int root = static_cast<int>(roundf(
-                   69.0f + 12.0f * log2f(melodyFrequencyA / 432.0f)
-               ));
-               int target = static_cast<int>(roundf(
-                   69.0f + 12.0f * log2f(melodyFrequencyB / 432.0f)
-               ));
 
-                ///
+        if(currentAspect != ASPECT_NONE && aspectA >= 0 && aspectB >= 0)
+        {
+            float melodyFrequencyA = planets[aspectA].frequency;
+            float melodyFrequencyB = planets[aspectB].frequency;
+
+            // Keep both planetary pitches in a useful register.
+            while(melodyFrequencyA < 220.0f)
+                melodyFrequencyA *= 2.0f;
+            while(melodyFrequencyA > 880.0f)
+                melodyFrequencyA *= 0.5f;
+
+            while(melodyFrequencyB < 220.0f)
+                melodyFrequencyB *= 2.0f;
+            while(melodyFrequencyB > 880.0f)
+                melodyFrequencyB *= 0.5f;
+
+            if(!melodyActive ||
+            currentAspect != melodyLastAspect ||
+            aspectA != melodyLastA ||
+            aspectB != melodyLastB)
+            {
+                int root = static_cast<int>(roundf(
+                    69.0f + 12.0f * log2f(melodyFrequencyA / 432.0f)
+                ));
+
+                int target = static_cast<int>(roundf(
+                    69.0f + 12.0f * log2f(melodyFrequencyB / 432.0f)
+                ));
+
                 switch(currentAspect)
                 {
-                    case ASPECT_CONJUNCTION:
+                    case ASPECT_CONJUNCTION: // 5 notes
                         melodyNotes[0] = MelodyMidiToFrequency(root);
                         melodyNotes[1] = MelodyMidiToFrequency(root + 2);
                         melodyNotes[2] = MelodyMidiToFrequency(target);
                         melodyNotes[3] = MelodyMidiToFrequency(root + 2);
                         melodyNotes[4] = MelodyMidiToFrequency(root);
+                        melodyLength = 5;
                         break;
 
-                    case ASPECT_SEXTILE:
+                    case ASPECT_SEXTILE: // 3 notes
                         melodyNotes[0] = MelodyMidiToFrequency(root);
-                        melodyNotes[1] = MelodyMidiToFrequency(root + 2);
+                        melodyNotes[1] = MelodyMidiToFrequency(root + 7);
                         melodyNotes[2] = MelodyMidiToFrequency(target);
-                        melodyNotes[3] = MelodyMidiToFrequency(root + 7);
-                        melodyNotes[4] = MelodyMidiToFrequency(target);
+                        melodyLength = 3;
                         break;
 
-                    case ASPECT_SQUARE:
+                    case ASPECT_SQUARE: // 5 notes
                         melodyNotes[0] = MelodyMidiToFrequency(root);
                         melodyNotes[1] = MelodyMidiToFrequency(target);
                         melodyNotes[2] = MelodyMidiToFrequency(root + 6);
                         melodyNotes[3] = MelodyMidiToFrequency(root);
                         melodyNotes[4] = MelodyMidiToFrequency(root);
+                        melodyLength = 5;
                         break;
 
-                    case ASPECT_TRINE:
+                    case ASPECT_TRINE: // 3 notes
                         melodyNotes[0] = MelodyMidiToFrequency(root);
                         melodyNotes[1] = MelodyMidiToFrequency(root + 4);
                         melodyNotes[2] = MelodyMidiToFrequency(target);
-                        melodyNotes[3] = MelodyMidiToFrequency(root + 9);
-                        melodyNotes[4] = MelodyMidiToFrequency(target);
+                        melodyLength = 3;
                         break;
 
-                    case ASPECT_OPPOSITION:
-                        melodyNotes[0] = MelodyMidiToFrequency(root);
-                        melodyNotes[1] = MelodyMidiToFrequency(target);
-                        melodyNotes[2] = MelodyMidiToFrequency(root);
-                        melodyNotes[3] = MelodyMidiToFrequency(target);
-                        melodyNotes[4] = MelodyMidiToFrequency(root);
+                    case ASPECT_OPPOSITION: // 1 long note
+                        melodyNotes[0] = MelodyMidiToFrequency(target);
+                        melodyLength = 1;
                         break;
 
                     default:
+                        melodyLength = 0;
                         break;
                 }
 
+                if(melodyLength > 0)
+                {
+                    melodyStep = 0;
+                    melodyCurrentFrequency = melodyNotes[0];
 
+                    switch(currentAspect)
+                    {
+                        case ASPECT_CONJUNCTION:
+                        case ASPECT_SQUARE:
+                            melodySamplesUntilNext = 9000;
+                            break;
 
-               melodyStep = 0;
-               melodyCurrentFrequency = melodyNotes[0];
-               melodySamplesUntilNext = 9000;
-               melodyActive = true;
-               melodyLastAspect = currentAspect;
-               melodyLastA = aspectA;
-               melodyLastB = aspectB;
-           }
-       }
-       else
-       {
-           melodyActive = false;
-           melodyLastAspect = ASPECT_NONE;
-           melodyLastA = -1;
-           melodyLastB = -1;
-       }
+                        case ASPECT_SEXTILE:
+                        case ASPECT_TRINE:
+                            melodySamplesUntilNext = 12000;
+                            break;
+
+                        case ASPECT_OPPOSITION:
+                            melodySamplesUntilNext = 24000;
+                            break;
+
+                        default:
+                            melodySamplesUntilNext = 9000;
+                            break;
+                    }
+
+                    melodyActive = true;
+                }
+                else
+                {
+                    melodyActive = false;
+                }
+
+                melodyLastAspect = currentAspect;
+                melodyLastA = aspectA;
+                melodyLastB = aspectB;
+            }
+        }
+        else
+        {
+            melodyActive = false;
+            melodyLastAspect = ASPECT_NONE;
+            melodyLastA = -1;
+            melodyLastB = -1;
+        }
+
+       
 
        // --------------------------------------------------------
        // CONSTELLATION VOICE TRIGGERS
@@ -344,18 +380,25 @@ void AudioCallback(
 
        float originSemitones = originValue * 24.0f - 12.0f;
        float originRatio = powf(2.0f, originSemitones / 12.0f);
-       float Alchemy = knobs.s33().Process();
+
+       // ALCHEMY
+       float Alchemy = knobs.s37().Process();
 
        // Crystal effect controls.
        float crystalRefraction = knobs.s34().Process();
-       float crystalRadiance = knobs.s37().Process();
+       float crystalRadiance = crystalRefraction;
        float crystalWet = knobs.s35().Process();
+
+       // KOSMOS
+       float kosmos = knobs.s32().Process();
 
        // --------------------------------------------------------
        // AUDIO PROCESSING
        // Generate the planetary voices and constellation voices
        // for every sample in the current audio block.
        // --------------------------------------------------------
+
+       const bool anyPadActive = AnyPadActive();
 
        for(size_t i = 0; i < size; i++)
        {
@@ -367,11 +410,31 @@ void AudioCallback(
                if(melodySamplesUntilNext > 0)
                    --melodySamplesUntilNext;
                if(melodySamplesUntilNext == 0)
-               {
-                   melodyStep = (melodyStep + 1) % MELODY_LENGTH;
-                   melodyCurrentFrequency = melodyNotes[melodyStep];
-                   melodySamplesUntilNext = 9000;
-               }
+                {
+                    melodyStep = (melodyStep + 1) % melodyLength;
+                    melodyCurrentFrequency = melodyNotes[melodyStep];
+
+                    switch(melodyLastAspect)
+                    {
+                        case ASPECT_CONJUNCTION:
+                        case ASPECT_SQUARE:
+                            melodySamplesUntilNext = 9000;
+                            break;
+
+                        case ASPECT_SEXTILE:
+                        case ASPECT_TRINE:
+                            melodySamplesUntilNext = 12000;
+                            break;
+
+                        case ASPECT_OPPOSITION:
+                            melodySamplesUntilNext = 24000;
+                            break;
+
+                        default:
+                            melodySamplesUntilNext = 9000;
+                            break;
+                    }
+            }
            }
            for(int v = 0; v < 10; v++)
            {
@@ -416,7 +479,7 @@ void AudioCallback(
                bool gate = false;
                if(planet != -1)
                    gate = padStates[planet];
-               planetSig += ProcessVoice(
+                   planetSig += ProcessVoice(
                    &voices[v],
                    gate,
                    0.0f,
@@ -424,6 +487,9 @@ void AudioCallback(
                    originRatio,
                    arcValue,
                    Alchemy,
+                   kosmos, 
+                   v, 
+                   voices[0].frequency,
                    &combLP6Breath
                );
            }
@@ -432,36 +498,36 @@ void AudioCallback(
            // Combine the main and constellation signals.
            // ----------------------------------------------------
            float sig = planetSig + constellationSig * 1.10f;
+
            // ----------------------------------------------------
-           // GLOBAL REVERB
-           // Cross-feedback between the two delay lines creates
-           // the existing stereo reverb effect.
-           // ----------------------------------------------------
-           float reverbL = reverbDelayL.Read();
-           float reverbR = reverbDelayR.Read();
-           reverbDelayL.Write(
-               sig + reverbR * 0.35f
-           );
-           reverbDelayR.Write(
-               sig + reverbL * 0.35f
-           );
-           sig =
-               sig * 0.75f
-               + reverbL * 0.15f
-               + reverbR * 0.15f;
-           // Preserve the post-reverb signal for the dry/wet mix.
-           float drySig = sig;
+            // GLOBAL STEREO REVERB — DaisySP ReverbSc
+            float reverbOutL = 0.0f;
+            float reverbOutR = 0.0f;
+
+            reverb.Process(
+                sig,
+                sig,
+                &reverbOutL,
+                &reverbOutR
+            );
+
+            sig = sig * 1.05f
+                + reverbOutL * 0.20f
+                + reverbOutR * 0.20f; 
+
            // ----------------------------------------------------
            // CRYSTAL EFFECTS
            // Process the signal using the selected crystal mode.
            // ----------------------------------------------------
+           float drySig = sig;
+
            CrystalStereo crystalSig = crystals.Process(
-               sig,
-               switches.A(),
-               crystalRefraction,
-               crystalRadiance,
-               AnyPadActive()
-           );
+                sig,
+                switches.A(),
+                crystalRefraction,
+                crystalRadiance,
+                anyPadActive
+            );
            // Blend the original signal with the stereo effect.
            float outputL =
                drySig * (1.0f - crystalWet)
@@ -507,8 +573,23 @@ int main()
        switches.Init();
        transit.Init();
        float sampleRate = hw.AudioSampleRate();
-       InitNUUTSineWavetable();
        InitCombLP6Breath(&combLP6Breath, sampleRate);
+       const int reverbInitStatus = reverb.Init(sampleRate);
+
+       if(reverbInitStatus != 0)
+        {
+            while(true)
+            {
+                hw.SetLed(true);
+                System::Delay(100);
+                hw.SetLed(false);
+                System::Delay(100);
+            }
+        }
+
+        reverb.SetFeedback(0.85f);
+        reverb.SetLpFreq(10000.0f);
+
        crystals.Init(sampleRate);
        // Initialize all main voices.
        for(int i = 0; i < 14; i++)

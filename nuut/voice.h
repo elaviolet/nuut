@@ -10,113 +10,15 @@
 
 using namespace daisysp;
 
-// ============================================================
-// SINE WAVETABLE
-// ============================================================
 
-constexpr int NUUT_WAVETABLE_SIZE = 2048;
-
-struct NUUTSineWavetable
-{
-    float table[NUUT_WAVETABLE_SIZE + 1];
-};
-
-inline NUUTSineWavetable nuutSineTable;
-
-inline void InitNUUTSineWavetable()
-{
-    for(int i = 0; i <= NUUT_WAVETABLE_SIZE; ++i)
-    {
-        nuutSineTable.table[i] =
-            sinf(TWOPI_F * static_cast<float>(i)
-                 / static_cast<float>(NUUT_WAVETABLE_SIZE));
-    }
-}
-
-inline float NUUTSine(float phase)
-{
-    phase -= floorf(phase);
-
-    float index = phase * NUUT_WAVETABLE_SIZE;
-    int i = static_cast<int>(index);
-    float frac = index - static_cast<float>(i);
-
-    return nuutSineTable.table[i]
-         + frac * (nuutSineTable.table[i + 1]
-         - nuutSineTable.table[i]);
-}
-
-// ============================================================
-// HARMONIC AMPLITUDES
-// ============================================================
-
-inline void BuildNUUTHarmonics(float* amps)
-{
-    amps[0] = 0.40f;
-    amps[1] = 0.04f;
-    amps[2] = 0.015f;
-    amps[3] = 0.010f;
-    amps[4] = 0.006f;
-    amps[5] = 0.003f;
-    amps[6] = 0.0015f;
-    amps[7] = 0.0f;
-}
-
-// ============================================================
-// HARMONIC RENDERER
-// ============================================================
-
-struct NUUTHarmonicRenderer
-{
-    float phase[7] = {};
-};
-
-inline void InitNUUTHarmonicRenderer(NUUTHarmonicRenderer& renderer)
-{
-    for(int i = 0; i < 7; ++i)
-        renderer.phase[i] = 0.0f;
-}
-
-inline float ProcessNUUTHarmonicRenderer(
-    NUUTHarmonicRenderer* renderer,
-    float frequency,
-    const float* amplitudes,
-    const float* phases,
-    float alchemy,
-    float sampleRate)
-{
-    float out = 0.0f;
-    const float inharmonicity = 0.0f;
-
-    for(int i = 0; i < 7; ++i)
-    {
-        float harmonic = static_cast<float>(i + 1);
-
-        harmonic += inharmonicity
-                  * static_cast<float>(i)
-                  * static_cast<float>(i);
-
-        renderer->phase[i] +=
-            (frequency * harmonic) / sampleRate;
-
-        if(renderer->phase[i] >= 1.0f)
-            renderer->phase[i] -= 1.0f;
-
-        float phase = renderer->phase[i] + phases[i];
-        phase -= floorf(phase);
-
-        out += NUUTSine(phase) * amplitudes[i];
-    }
-
-    return out;
-}
 
 // ============================================================
 // MAIN VOICE
 // ============================================================
 
 struct Voice {
-    NUUTHarmonicRenderer harmonicRenderer;
+    Oscillator osc;
+    Oscillator triOsc;
     NUUTModalResonator resonator;
 
     Svf alchemyFilter;
@@ -124,7 +26,11 @@ struct Voice {
 
     float envelope = 0.0f;
     float frequency = 432.0f;
+    float smoothedFrequency = 432.0f;
+    float sampleRate = 48000.0f;
 };
+
+
 
 // ============================================================
 // SHARED EFFECT STATE
@@ -145,6 +51,9 @@ inline void InitCombLP6Breath(
     state->lfo2.SetWaveform(Oscillator::WAVE_SIN);
     state->lfo2.SetFreq(0.11f);
     state->lfo2.SetAmp(1.0f);
+
+    state->comb.Init(sampleRate, state->combBuffer, 2048);
+    state->comb.SetFreq(600.0f);
 }
 
 // ============================================================
@@ -171,19 +80,31 @@ struct PlanetConstellationVoice
 // ============================================================
 
 
+
 inline void InitVoice(Voice* voice, float sampleRate)
 {
-    InitNUUTHarmonicRenderer(voice->harmonicRenderer);
+    voice->osc.Init(sampleRate);
+    voice->osc.SetWaveform(Oscillator::WAVE_SIN);
+    voice->osc.SetAmp(0.40f);
+    voice->osc.SetFreq(432.0f);
+
+    voice->triOsc.Init(sampleRate);
+    voice->triOsc.SetWaveform(Oscillator::WAVE_POLYBLEP_SQUARE);
+    voice->triOsc.SetAmp(0.05f);
+    
+
     InitNUUTModalResonator(&voice->resonator, sampleRate);
 
     voice->alchemyFilter.Init(sampleRate);
     voice->alchemyFilter.SetFreq(2000.0f);
-    voice->alchemyFilter.SetRes(0.2f);
-    voice->alchemyLfoPhase = 0.0f;
+    voice->alchemyFilter.SetRes(0.9f);
 
+    voice->alchemyLfoPhase = 0.0f;
     voice->envelope = 0.0f;
     voice->frequency = 432.0f;
+    voice->smoothedFrequency = 432.0f;
 }
+
 
 
 inline void InitPlanetConstellationVoice(
@@ -221,59 +142,90 @@ inline float ProcessVoice(
     float originRatio,
     float arcValue,
     float alchemy,
+    float kosmos, int voiceIndex,
+    float rootFrequency,
     CombLP6BreathState* state)
 {
-    const float frequency = voice->frequency * originRatio;
+    // Smooth frequency transitions between planetary voices
+    const float kosmosAmount = fmaxf(0.0f, fminf(1.0f, kosmos));
 
+    float harmonicRatio = 1.0f;
+
+    if(voiceIndex == 1)
+    {
+        harmonicRatio = 1.0f + kosmosAmount * 0.498307f;
+    }
+    else if(voiceIndex == 2)
+    {
+        harmonicRatio = 1.0f + kosmosAmount * 1.0f;
+    }
+
+    const float targetFrequency =
+    voice->frequency * originRatio * harmonicRatio;
+
+    voice->smoothedFrequency +=
+        (targetFrequency - voice->smoothedFrequency) * 0.001f;
+
+    const float frequency = voice->smoothedFrequency;
+
+    // ALCHEMY — slow spectral movement
     const float a = fmaxf(0.0f, fminf(1.0f, alchemy));
 
-    const float harmonicAmps[8] = {
-        0.40f,
-        0.04f  + a * 0.025f,
-        0.015f + a * 0.020f,
-        0.010f + a * 0.018f,
-        0.006f + a * 0.014f,
-        0.003f + a * 0.010f,
-        0.0015f + a * 0.007f,
-        0.0f
-    };
+    voice->alchemyLfoPhase += 0.07f / voice->sampleRate;
+    if(voice->alchemyLfoPhase >= 1.0f)
+        voice->alchemyLfoPhase -= 1.0f;
 
-    float phases[7];
+    const float p = voice->alchemyLfoPhase;
+    const float lfo = (p < 0.5f)
+        ? (p * 4.0f - 1.0f)
+        : (3.0f - p * 4.0f);
 
-    phases[0] = 0.0f;
-    phases[1] = 0.12f * alchemy;
-    phases[2] = 0.30f * alchemy;
-    phases[3] = 0.50f * alchemy;
-    phases[4] = 0.75f * alchemy;
-    phases[5] = 1.00f * alchemy;
-    phases[6] = 1.30f * alchemy;
+   const float morph = fmaxf(0.0f, fminf(
+        1.0f,
+        a + lfo * 0.45f * a
+    ));
 
-    float sig = ProcessNUUTHarmonicRenderer(
-        &voice->harmonicRenderer,
-        frequency,
-        harmonicAmps,
-        phases,
-        alchemy,
-        48000.0f);
+    voice->osc.SetFreq(frequency);
+    voice->triOsc.SetFreq(frequency * 0.5f);
+
+    float sine = voice->osc.Process();
+    float triangle = voice->triOsc.Process();
+
+    float sig = sine + triangle;
+
 
     // Crystal Modal Resonator
     sig = ProcessNUUTModalResonator(
-            &voice->resonator,
-            sig,
-            frequency
+        &voice->resonator,
+        sig,
+        frequency,
+        morph
     );
 
-    sig *= 0.45f;
+   // ALCHEMY — filter + comb morph
+    const float dry = sig;
 
-    //Alchemy +
+    voice->alchemyFilter.Process(sig);
+    const float filtered = voice->alchemyFilter.Low();
+
+    const float combInput = dry * (1.0f - a) + filtered * a;
+    const float combOutput = state->comb.Process(combInput * 0.5f);
+    const float combMix = a * 0.25f;
+
+    sig = combInput * (1.0f - combMix)
+        + combOutput * combMix;
+
+    sig *= 0.45f;
  
 
     // Envelope
-    const float attackTime = 5.0f + arcValue * 7.0f;
-    const float releaseTime = 2.0f + arcValue * 4.0f;
+    const float sr = voice->sampleRate;
 
-    const float attackInc = 1.0f / (attackTime * 48000.0f);
-    const float releaseInc = 1.0f / (releaseTime * 48000.0f);
+    const float attackTime  = 0.03f + arcValue * 1.20f;
+    const float releaseTime = 0.15f + arcValue * 3.00f;
+
+    const float attackInc  = 1.0f / (attackTime * sr);
+    const float releaseInc = 1.0f / (releaseTime * sr);
 
     if(gate)
     {

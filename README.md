@@ -17,17 +17,17 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 
 <h3>Knobs</h3>
 
-- S30 - **Constellation** | Adds additional planetary voices beyond the 3 main voices
+- S30 - **Celestia** | Adds additional planetary voices beyond the 3 main voices
 - S31 - **Origin** | Controls the harmonic root / pitch center and shifts the whole system around the central tuning
-- S32 - **Arc** | Controls the envelope of all active voices, shaping global attack and release time
-- S33 - **Aura** | Controls the depth and character of the selected Crystal transformation
-- S34 - **Refraction** | Controls spatial dispersion and stereo behavior of the Crystal effects
+- S32 - **Kosmos** | Continuously reshapes the harmonic relationships between the 3 main planetary voices, moving between consonant and more complex intervals
+- S33 - **Arc** | Controls the envelope of all active voices, shaping global attack and release time
+- S34 - **Refraction** | Controls spatial dispersion, stereo behavior and and distinctive sonic activity of the selected Crystal effect
 - S35 - **Crystal Mix** | Controls the balance between the dry signal and the Crystal-processed signal
 
 <h3>Faders</h3>
 
 - S36 (left) - **Transit** | Controls planetary orbital movement through the 360° system, enabling astrological events that trigger additional harmonic modulations and sonic transformations
-- S37 (right) - **Radiance** | Controls the energy, brightness and distinctive sonic activity of the selected Crystal effect
+- S37 (right) - **Alchemy** | Shapes the tonal character and timbral response of the voices
 
 <h3>Pads</h3>
 

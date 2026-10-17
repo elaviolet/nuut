@@ -13,6 +13,7 @@ class Crystals
 {
 public:
     void Init(float sampleRate);
+
     CrystalStereo Process(
         float input,
         int mode,
@@ -22,18 +23,29 @@ public:
     );
 
 private:
+    // Shared delay
     daisysp::DelayLine<float, 24000> crystalDelay;
+
+    // Ametista: octave shimmer and chimes
     daisysp::PitchShifter crystalShifter;
-    daisysp::Oscillator crystalLfo;
     daisysp::Oscillator crystalChime;
     daisysp::Oscillator crystalChimeHigh;
+
+    // Shared LFO for slow modulation
+    daisysp::Oscillator crystalLfo;
+
+    // Ossidiana: dark resonant filter
     daisysp::Svf crystalFilter;
+
+    // Acquamarina: filtered water noise
     daisysp::Svf aquamarineNoiseFilter;
     daisysp::WhiteNoise aquamarineNoise;
 
+    // General parameters
     float sampleRate = 48000.0f;
     float aquamarineDelayTime = 0.04f;
 
+    // Ametista: sparkle generation
     float sparkleEnvelope = 0.0f;
     uint32_t sparkleCounter = 0;
     uint32_t sparkleRandom = 1234567;

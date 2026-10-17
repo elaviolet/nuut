@@ -1,3 +1,4 @@
+
 #include "crystals.h"
 
 void Crystals::Init(float sampleRate)
@@ -8,8 +9,9 @@ void Crystals::Init(float sampleRate)
     crystalDelay.Init();
     crystalDelay.SetDelay(sampleRate * 0.35f);
 
-    // Ametista: pitch shimmer
+    // Ametista: octave shimmer
     crystalShifter.Init(sampleRate);
+    crystalShifter.SetFun(0.0f);
     crystalShifter.SetTransposition(12.0f);
 
     // Shared LFO
@@ -18,7 +20,7 @@ void Crystals::Init(float sampleRate)
     crystalLfo.SetFreq(0.15f);
     crystalLfo.SetAmp(1.0f);
 
-    // Ametista: chimes
+    // Ametista: crystalline chimes
     crystalChime.Init(sampleRate);
     crystalChime.SetWaveform(daisysp::Oscillator::WAVE_SIN);
     crystalChime.SetFreq(2222.2f);
@@ -29,12 +31,12 @@ void Crystals::Init(float sampleRate)
     crystalChimeHigh.SetFreq(6200.0f);
     crystalChimeHigh.SetAmp(0.35f);
 
-    // Ossidiana filter
+    // Ossidiana: dark resonant filter
     crystalFilter.Init(sampleRate);
     crystalFilter.SetFreq(500.0f);
     crystalFilter.SetRes(0.4f);
 
-    // Acquamarina: filtered white noise
+    // Acquamarina: filtered water noise
     aquamarineNoise.Init();
 
     aquamarineNoiseFilter.Init(sampleRate);
@@ -42,6 +44,7 @@ void Crystals::Init(float sampleRate)
     aquamarineNoiseFilter.SetRes(0.2f);
 
     aquamarineDelayTime = 0.04f;
+
     sparkleEnvelope = 0.0f;
     sparkleCounter = 0;
     sparkleRandom = 1234567;
@@ -55,14 +58,17 @@ CrystalStereo Crystals::Process(
     float radiance,
     bool active)
 {
-    // Ametista
+    CrystalStereo result{input, input};
+
+    // AMETISTA
     if(mode == daisy::Switch3::POS_CENTER)
     {
         crystalDelay.SetDelay(sampleRate * 0.35f);
 
-        float shimmer = crystalShifter.Process(input);
+        // Octave shimmer
+        const float shimmer = crystalShifter.Process(input);
 
-        // Radiance sparkles
+        // Random crystalline sparkles
         ++sparkleCounter;
 
         if(radiance > 0.05f && sparkleCounter > 1800 && active)
@@ -70,7 +76,7 @@ CrystalStereo Crystals::Process(
             sparkleRandom =
                 sparkleRandom * 1664525u + 1013904223u;
 
-            uint32_t chance = sparkleRandom % 100;
+            const uint32_t chance = sparkleRandom % 100;
 
             if(chance < static_cast<uint32_t>(radiance * 35.0f))
             {
@@ -84,9 +90,8 @@ CrystalStereo Crystals::Process(
             sparkleCounter = 0;
         }
 
-        float chime =
-            (crystalChime.Process()
-             + crystalChimeHigh.Process())
+        const float chime =
+            (crystalChime.Process() + crystalChimeHigh.Process())
             * sparkleEnvelope;
 
         sparkleEnvelope *= 0.99998f;
@@ -94,59 +99,59 @@ CrystalStereo Crystals::Process(
         if(sparkleEnvelope < 0.001f)
             sparkleEnvelope = 0.0f;
 
-        float delayed = crystalDelay.Read();
+        const float delayed = crystalDelay.Read();
 
-        crystalDelay.Write(shimmer * 0.7f + delayed * 0.65f);
+        crystalDelay.Write(shimmer * 0.7f + delayed * 0.30f);
 
-        float refractionAmount = refraction * 0.5f;
-        float chimeAmount = chime * radiance * 0.005f;
-        float panAmount = chimePan * refraction;
+        const float refractionAmount = refraction * 0.5f;
+        const float chimeAmount = chime * radiance * 0.005f;
+        const float panAmount = chimePan * refraction;
 
-        float chimeLeft = chimeAmount * (1.0f - panAmount);
-        float chimeRight = chimeAmount * (1.0f + panAmount);
+        const float chimeLeft =
+            chimeAmount * (1.0f - panAmount);
 
-        float leftEffect =
+        const float chimeRight =
+            chimeAmount * (1.0f + panAmount);
+
+        const float leftEffect =
             shimmer * (0.175f + refractionAmount)
             + delayed * (0.25f - refractionAmount * 0.5f)
             + chimeLeft;
 
-        float rightEffect =
+        const float rightEffect =
             shimmer * (0.175f - refractionAmount * 0.5f)
             + delayed * (0.25f + refractionAmount)
             + chimeRight;
 
-        return {
+        result = {
             input + leftEffect,
             input + rightEffect
         };
     }
 
-    // Acquamarina
-    if(mode == daisy::Switch3::POS_UP)
+    // ACQUAMARINA
+    else if(mode == daisy::Switch3::POS_UP)
     {
-        float movement = crystalLfo.Process();
+        const float movement = crystalLfo.Process();
 
-        // Filtered white noise, exclusive to Acquamarina
-        // Slow cyclic wave for the water noise
-        float wave = 0.5f + 0.5f * movement;
-
+        // Slowly modulated water-noise envelope
+        const float wave = 0.5f + 0.5f * movement;
         float noiseEnvelope = wave * wave;
         noiseEnvelope *= noiseEnvelope;
 
-        float noise = aquamarineNoise.Process();
+        const float noise = aquamarineNoise.Process();
         aquamarineNoiseFilter.Process(noise);
 
-        float filteredNoise = aquamarineNoiseFilter.Low();
+        const float filteredNoise = aquamarineNoiseFilter.Low();
 
-        float noiseAmount =
+        const float noiseAmount =
             (0.001f + radiance * 0.002f) * noiseEnvelope;
 
-        float noiseSignal = active
-            ? filteredNoise * noiseAmount
-            : 0.0f;
+        const float noiseSignal =
+            active ? filteredNoise * noiseAmount : 0.0f;
 
-        // Slow, gentle aquatic movement
-        float targetDelayTime =
+        // Gentle aquatic delay movement
+        const float targetDelayTime =
             0.040f + movement * 0.003f;
 
         aquamarineDelayTime +=
@@ -154,41 +159,33 @@ CrystalStereo Crystals::Process(
 
         crystalDelay.SetDelay(aquamarineDelayTime * sampleRate);
 
-        float delayed = crystalDelay.Read();
-
-        float feedback = 0.18f + radiance * 0.08f;
+        const float delayed = crystalDelay.Read();
+        const float feedback = 0.18f + radiance * 0.08f;
 
         crystalDelay.Write(
             input + noiseSignal + delayed * feedback
         );
 
-        float refractionAmount = refraction * 0.25f;
+        const float refractionAmount = refraction * 0.25f;
 
-        // One mono delay, with different stereo balances
-        float leftEffect =
+        result = {
             input * 0.85f
-            + delayed * (0.30f + refractionAmount)
-            + noiseSignal;
+                + delayed * (0.30f + refractionAmount)
+                + noiseSignal,
 
-        float rightEffect =
             input * 0.85f
-            + delayed * (0.30f - refractionAmount)
-            + noiseSignal;
-
-        return {
-            leftEffect,
-            rightEffect
+                + delayed * (0.30f - refractionAmount)
+                + noiseSignal
         };
     }
 
-    // Ossidiana
-    if(mode == daisy::Switch3::POS_DOWN)
+    // OSSIDIANA
+    else if(mode == daisy::Switch3::POS_DOWN)
     {
         crystalDelay.SetDelay(sampleRate * 0.35f);
 
-        float delayed = crystalDelay.Read();
-
-        float feedback = 0.55f + radiance * 0.12f;
+        const float delayed = crystalDelay.Read();
+        const float feedback = 0.55f + radiance * 0.12f;
 
         crystalDelay.Write(input + delayed * feedback);
 
@@ -196,23 +193,18 @@ CrystalStereo Crystals::Process(
             input + delayed * (0.4f + radiance * 0.15f)
         );
 
-        float dark = crystalFilter.Low();
-        float refractionAmount = refraction * 0.5f;
-        float resonance = 0.55f * 0.45f + radiance * 0.25f;
+        const float dark = crystalFilter.Low();
+        const float refractionAmount = refraction * 0.5f;
+        const float resonance = 0.55f * 0.45f + radiance * 0.25f;
 
-        float leftEffect =
+        result = {
             input * (0.65f - refractionAmount * 0.25f)
-            + dark * (resonance + refractionAmount);
+                + dark * (resonance + refractionAmount),
 
-        float rightEffect =
             input * (0.65f + refractionAmount)
-            + dark * (resonance - refractionAmount * 0.5f);
-
-        return {
-            leftEffect,
-            rightEffect
+                + dark * (resonance - refractionAmount * 0.5f)
         };
     }
 
-    return { input, input };
+    return result;
 }

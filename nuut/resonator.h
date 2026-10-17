@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <cmath>
@@ -40,7 +39,9 @@ inline void InitNUUTModalResonator(
     resonator->sampleRate = sampleRate;
     resonator->updateCounter = 0;
 
-    for(std::size_t i = 0; i < NUUTModalResonator::MODE_COUNT; ++i)
+    for(std::size_t i = 0;
+        i < NUUTModalResonator::MODE_COUNT;
+        ++i)
     {
         resonator->y1[i] = 0.0f;
         resonator->y2[i] = 0.0f;
@@ -52,77 +53,57 @@ inline void InitNUUTModalResonator(
     }
 }
 
+
 inline float ProcessNUUTModalResonator(
-    NUUTModalResonator* resonator,
+    NUUTModalResonator* r,
     float input,
-    float baseFrequency)
+    float baseFrequency,
+    float alchemy = 0.0f)
 {
-    constexpr float MODE_RATIOS[NUUTModalResonator::MODE_COUNT] =
+    static constexpr float MODE_RATIOS[NUUTModalResonator::MODE_COUNT] =
     {
-        1.0f,
-        1.498f,
-        2.01f,
-        2.72f,
-        3.87f,
-        5.12f
+        1.0f, 1.498f, 2.01f, 2.72f, 3.87f, 5.12f
     };
 
-    constexpr float MODE_DRIFT[NUUTModalResonator::MODE_COUNT] =
+    static constexpr float MODE_DRIFT[NUUTModalResonator::MODE_COUNT] =
     {
-        0.0010f,
-        0.0018f,
-        0.0013f,
-        0.0022f,
-        0.0016f,
-        0.0025f
+        0.0010f, 0.0018f, 0.0013f,
+        0.0022f, 0.0016f, 0.0025f
     };
 
-    constexpr float MODE_SPEED[NUUTModalResonator::MODE_COUNT] =
+    static constexpr float MODE_SPEED[NUUTModalResonator::MODE_COUNT] =
     {
-        0.035f,
-        0.047f,
-        0.029f,
-        0.041f,
-        0.025f,
-        0.053f
-    };
-
-    constexpr float MODE_WEIGHTS[NUUTModalResonator::MODE_COUNT] =
-    {
-        1.00f,
-        0.80f,
-        0.60f,
-        0.42f,
-        0.28f,
-        0.18f
+        0.035f, 0.047f, 0.029f,
+        0.041f, 0.025f, 0.053f
     };
 
     constexpr float TWO_PI = 6.28318530718f;
     constexpr float RADIUS = 0.97f;
-    constexpr float MODE_GAIN = 0.05f;
-    constexpr float WET_MIX = 0.20f;
+    constexpr float MODE_GAIN = 0.12f;
+    constexpr float WET_MIX = 0.65f;
 
-    const float sr = resonator->sampleRate;
+    const float a = fmaxf(0.0f, fminf(1.0f, alchemy));
+    const float sr = r->sampleRate;
 
     if(baseFrequency < 20.0f)
         baseFrequency = 20.0f;
 
-    // Update resonator coefficients every 32 samples.
-    // This keeps the mode frequencies moving smoothly
-    // without recalculating cosine for every sample.
-    if(resonator->updateCounter == 0)
+    // Refresh the resonator coefficients every 64 samples.
+    // The modal frequency drift continues at the original rate.
+    if(r->updateCounter == 0)
     {
+        const float maxFrequency = sr * 0.42f;
+        const float damping = 1.0f - RADIUS;
+        const float inputCoeff = damping * damping;
+
         for(std::size_t i = 0;
             i < NUUTModalResonator::MODE_COUNT;
             ++i)
         {
-            const float drift =
-                sinf(resonator->phase[i]) * MODE_DRIFT[i];
+            const float drift = sinf(r->phase[i]) * MODE_DRIFT[i];
 
             float frequency =
                 baseFrequency * MODE_RATIOS[i] * (1.0f + drift);
-
-            const float maxFrequency = sr * 0.42f;
 
             if(frequency > maxFrequency)
                 frequency = maxFrequency;
@@ -132,21 +113,13 @@ inline float ProcessNUUTModalResonator(
 
             const float omega = TWO_PI * frequency / sr;
 
-            resonator->coeffA[i] =
-                2.0f * RADIUS * cosf(omega);
-
-            resonator->coeffB[i] =
-                -(RADIUS * RADIUS);
-
-            const float damping = 1.0f - RADIUS;
-
-            resonator->coeffInput[i] =
-                damping * damping;
+            r->coeffA[i] = 2.0f * RADIUS * cosf(omega);
+            r->coeffB[i] = -(RADIUS * RADIUS);
+            r->coeffInput[i] = inputCoeff;
         }
     }
 
-    resonator->updateCounter =
-        (resonator->updateCounter + 1) & 31U;
+    r->updateCounter = (r->updateCounter + 1U) & 63U;
 
     float modalOutput = 0.0f;
 
@@ -154,26 +127,33 @@ inline float ProcessNUUTModalResonator(
         i < NUUTModalResonator::MODE_COUNT;
         ++i)
     {
-        // Slowly evolving modal frequencies.
-        resonator->phase[i] +=
-            TWO_PI * MODE_SPEED[i] / sr;
+        r->phase[i] += TWO_PI * MODE_SPEED[i] / sr;
 
-        if(resonator->phase[i] >= TWO_PI)
-            resonator->phase[i] -= TWO_PI;
+        if(r->phase[i] >= TWO_PI)
+            r->phase[i] -= TWO_PI;
 
-        // Two-pole resonator.
         const float y =
-            resonator->coeffInput[i] * input
-            + resonator->coeffA[i] * resonator->y1[i]
-            + resonator->coeffB[i] * resonator->y2[i];
+            r->coeffInput[i] * input
+            + r->coeffA[i] * r->y1[i]
+            + r->coeffB[i] * r->y2[i];
 
-        resonator->y2[i] = resonator->y1[i];
-        resonator->y1[i] = y;
+        r->y2[i] = r->y1[i];
+        r->y1[i] = y;
 
-        modalOutput += y * MODE_GAIN * MODE_WEIGHTS[i];
+        float weight;
+
+        switch(i)
+        {
+            case 0: weight = 1.00f; break;
+            case 1: weight = 0.80f + 0.20f * a; break;
+            case 2: weight = 0.60f + 0.40f * a; break;
+            case 3: weight = 0.42f + 0.48f * a; break;
+            case 4: weight = 0.28f + 0.52f * a; break;
+            default: weight = 0.18f + 0.57f * a; break;
+        }
+
+        modalOutput += y * MODE_GAIN * weight;
     }
 
-    // Conservative parallel blend: retain the original
-    // signal and add a restrained crystalline resonance.
     return input + modalOutput * WET_MIX;
 }
