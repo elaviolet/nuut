@@ -17,6 +17,10 @@ using namespace daisysp;
 DaisySeed hw;
 Voice voices[14];
 
+NUUTEventBell eventBell;
+bool eventBellTriggerPending = false;
+float eventBellFrequency = 432.0f;
+
 // Shared state for the Comb LP6 breath modulation.
 CombLP6BreathState combLP6Breath;
 
@@ -306,50 +310,70 @@ void AudioCallback(
                 }
 
                 if(melodyLength > 0)
-                {
-                    melodyStep = 0;
-                    melodyCurrentFrequency = melodyNotes[0];
-
-                    switch(currentAspect)
                     {
-                        case ASPECT_CONJUNCTION:
-                        case ASPECT_SQUARE:
-                            melodySamplesUntilNext = 9000;
-                            break;
+                        melodyStep = 0;
+                        melodyCurrentFrequency = melodyNotes[0];
 
-                        case ASPECT_SEXTILE:
-                        case ASPECT_TRINE:
-                            melodySamplesUntilNext = 12000;
-                            break;
+                        // Choose the bell frequency according to the aspect.
+                        // Preserve the original melody timing.
+                        switch(currentAspect)
+                        {
+                            case ASPECT_CONJUNCTION:
+                                eventBellFrequency = melodyNotes[0] * 2.0f;
+                                melodySamplesUntilNext = 9000;
+                                break;
 
-                        case ASPECT_OPPOSITION:
-                            melodySamplesUntilNext = 24000;
-                            break;
+                            case ASPECT_SQUARE:
+                                eventBellFrequency = melodyNotes[0] * 1.25f;
+                                melodySamplesUntilNext = 9000;
+                                break;
 
-                        default:
-                            melodySamplesUntilNext = 9000;
-                            break;
+                            case ASPECT_SEXTILE:
+                                eventBellFrequency = melodyNotes[0] * 1.5f;
+                                melodySamplesUntilNext = 12000;
+                                break;
+
+                            case ASPECT_TRINE:
+                                eventBellFrequency = melodyNotes[0] * 1.333333f;
+                                melodySamplesUntilNext = 12000;
+                                break;
+
+                            case ASPECT_OPPOSITION:
+                                eventBellFrequency = melodyNotes[0] * 1.666667f;
+                                melodySamplesUntilNext = 24000;
+                                break;
+
+                            default:
+                                eventBellFrequency = melodyNotes[0] * 2.0f;
+                                melodySamplesUntilNext = 9000;
+                                break;
+                        }
+
+                        // Trigger the bell only when a planet is active.
+                        if(AnyPadActive())
+                        {
+                            eventBellTriggerPending = true;
+                        }
+
+                        melodyActive = true;
+                    }
+                    else
+                    {
+                        melodyActive = false;
                     }
 
-                    melodyActive = true;
-                }
-                else
-                {
-                    melodyActive = false;
-                }
-
-                melodyLastAspect = currentAspect;
-                melodyLastA = aspectA;
-                melodyLastB = aspectB;
+                    melodyLastAspect = currentAspect;
+                    melodyLastA = aspectA;
+                    melodyLastB = aspectB;
+                    }
             }
-        }
-        else
-        {
-            melodyActive = false;
-            melodyLastAspect = ASPECT_NONE;
-            melodyLastA = -1;
-            melodyLastB = -1;
-        }
+            else
+            {
+                melodyActive = false;
+                melodyLastAspect = ASPECT_NONE;
+                melodyLastA = -1;
+                melodyLastB = -1;
+            }
 
        
 
@@ -404,6 +428,16 @@ void AudioCallback(
        {
            float planetSig = 0.0f;
            float constellationSig = 0.0f;
+
+            // Crystal event bell: trigger once, then let it ring.
+            float bellSig = ProcessNUUTEventBell(
+                &eventBell,
+                eventBellTriggerPending && anyPadActive,
+                eventBellFrequency
+            );
+
+            eventBellTriggerPending = false;
+
            // Advance the melody at roughly 0.1875-second intervals at 48 kHz.
            if(melodyActive && AnyPadActive())
            {
@@ -478,7 +512,9 @@ void AudioCallback(
                // ------------------------------------------------
                bool gate = false;
                if(planet != -1)
-                   gate = padStates[planet];
+                {
+                    gate = padStates[planet];
+                }
                    planetSig += ProcessVoice(
                    &voices[v],
                    gate,
@@ -497,7 +533,10 @@ void AudioCallback(
            // VOICE MIX
            // Combine the main and constellation signals.
            // ----------------------------------------------------
-           float sig = planetSig + constellationSig * 1.10f;
+           float sig = planetSig
+                        + constellationSig * 1.10f
+                        + bellSig * 0.005f;
+                   
 
            // ----------------------------------------------------
             // GLOBAL STEREO REVERB — DaisySP ReverbSc
@@ -573,6 +612,8 @@ int main()
        switches.Init();
        transit.Init();
        float sampleRate = hw.AudioSampleRate();
+
+       InitNUUTEventBell(&eventBell, sampleRate);
        InitCombLP6Breath(&combLP6Breath, sampleRate);
        const int reverbInitStatus = reverb.Init(sampleRate);
 

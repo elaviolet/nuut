@@ -157,3 +157,88 @@ inline float ProcessNUUTModalResonator(
 
     return input + modalOutput * WET_MIX;
 }
+
+
+struct NUUTEventBell
+{
+    static constexpr std::size_t MODE_COUNT = 6;
+
+    float y1[MODE_COUNT] = {};
+    float y2[MODE_COUNT] = {};
+    float coeffA[MODE_COUNT] = {};
+    float coeffB[MODE_COUNT] = {};
+
+    float sampleRate = 48000.0f;
+};
+
+inline void InitNUUTEventBell(
+    NUUTEventBell* bell,
+    float sampleRate)
+{
+    bell->sampleRate =
+        sampleRate > 0.0f ? sampleRate : 48000.0f;
+
+    for(std::size_t i = 0; i < NUUTEventBell::MODE_COUNT; ++i)
+    {
+        bell->y1[i] = 0.0f;
+        bell->y2[i] = 0.0f;
+        bell->coeffA[i] = 0.0f;
+        bell->coeffB[i] = 0.0f;
+    }
+}
+
+inline float ProcessNUUTEventBell(
+    NUUTEventBell* bell,
+    bool trigger,
+    float frequency)
+{
+    static constexpr float RATIOS[6] =
+    {1.0f, 2.76f, 5.40f, 8.93f, 13.34f, 18.64f};
+
+    static constexpr float DECAY[6] =
+        {0.30f, 0.25f, 0.20f, 0.16f, 0.12f, 0.09f};
+
+    static constexpr float EXCITATION[6] =
+        {0.35f, 0.40f, 0.38f, 0.32f, 0.25f, 0.18f};
+
+    static constexpr float WEIGHT[6] =
+        {0.08f, 0.30f, 0.48f, 0.62f, 0.70f, 0.65f};
+
+    constexpr float TWO_PI = 6.28318530718f;
+    const float sr = bell->sampleRate;
+
+    if(trigger)
+    {
+        frequency = fmaxf(180.0f, fminf(700.0f, frequency));
+
+        for(std::size_t i = 0; i < NUUTEventBell::MODE_COUNT; ++i)
+        {
+            float f = fminf(frequency * RATIOS[i], sr * 0.40f);
+            float radius = expf(-1.0f / (DECAY[i] * sr));
+            float omega = TWO_PI * f / sr;
+
+            bell->coeffA[i] = 2.0f * radius * cosf(omega);
+            bell->coeffB[i] = -(radius * radius);
+        }
+    }
+
+    float output = 0.0f;
+
+    for(std::size_t i = 0; i < NUUTEventBell::MODE_COUNT; ++i)
+    {
+        // A single excitation impulse starts the bell ringing.
+        float excitation = trigger ? EXCITATION[i] : 0.0f;
+
+        float y = excitation
+                + bell->coeffA[i] * bell->y1[i]
+                + bell->coeffB[i] * bell->y2[i];
+
+        bell->y2[i] = bell->y1[i];
+        bell->y1[i] = y;
+
+        output += y * WEIGHT[i];
+    }
+
+    return output;
+}
+
