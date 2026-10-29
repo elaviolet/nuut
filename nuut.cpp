@@ -15,6 +15,8 @@ using namespace daisy;
 using namespace daisysp;
 
 DaisySeed hw;
+CpuLoadMeter cpuMeter;
+
 Voice voices[14];
 
 NUUTEventBell eventBell;
@@ -165,6 +167,7 @@ void AudioCallback(
        AudioHandle::OutputBuffer out,
        size_t size)
 {
+       cpuMeter.OnBlockStart();
        // --------------------------------------------------------
        // PRIMARY CONTROLS
        // --------------------------------------------------------
@@ -596,6 +599,8 @@ void AudioCallback(
            constellationVoiceWasActive[i] =
                currentConstellationActive[i];
        }
+
+       cpuMeter.OnBlockEnd();
 }
 // ============================================================
 // MAIN
@@ -604,6 +609,10 @@ int main()
 {
        hw.Configure();
        hw.Init();
+
+       hw.StartLog(false);
+       hw.PrintLine("NUUT CPU monitor started");
+       
        knobs.Init(hw);
        hw.SetLed(true);
        System::Delay(1000);
@@ -612,6 +621,7 @@ int main()
        switches.Init();
        transit.Init();
        float sampleRate = hw.AudioSampleRate();
+       cpuMeter.Init(sampleRate, hw.AudioBlockSize());
 
        InitNUUTEventBell(&eventBell, sampleRate);
        InitCombLP6Breath(&combLP6Breath, sampleRate);

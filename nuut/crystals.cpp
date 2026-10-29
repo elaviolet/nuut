@@ -20,17 +20,6 @@ void Crystals::Init(float sampleRate)
     crystalLfo.SetFreq(0.15f);
     crystalLfo.SetAmp(1.0f);
 
-    // Ametista: crystalline chimes
-    crystalChime.Init(sampleRate);
-    crystalChime.SetWaveform(daisysp::Oscillator::WAVE_SIN);
-    crystalChime.SetFreq(2222.2f);
-    crystalChime.SetAmp(1.0f);
-
-    crystalChimeHigh.Init(sampleRate);
-    crystalChimeHigh.SetWaveform(daisysp::Oscillator::WAVE_SIN);
-    crystalChimeHigh.SetFreq(6200.0f);
-    crystalChimeHigh.SetAmp(0.35f);
-
     // Ossidiana: dark resonant filter
     crystalFilter.Init(sampleRate);
     crystalFilter.SetFreq(500.0f);
@@ -44,11 +33,6 @@ void Crystals::Init(float sampleRate)
     aquamarineNoiseFilter.SetRes(0.2f);
 
     aquamarineDelayTime = 0.04f;
-
-    sparkleEnvelope = 0.0f;
-    sparkleCounter = 0;
-    sparkleRandom = 1234567;
-    chimePan = 0.0f;
 }
 
 CrystalStereo Crystals::Process(
@@ -60,68 +44,26 @@ CrystalStereo Crystals::Process(
 {
     CrystalStereo result{input, input};
 
-    // AMETISTA
+    // AMETISTA: octave shimmer without sparkles
     if(mode == daisy::Switch3::POS_CENTER)
     {
         crystalDelay.SetDelay(sampleRate * 0.35f);
 
-        // Octave shimmer
         const float shimmer = crystalShifter.Process(input);
-
-        // Random crystalline sparkles
-        ++sparkleCounter;
-
-        if(radiance > 0.05f && sparkleCounter > 1800 && active)
-        {
-            sparkleRandom =
-                sparkleRandom * 1664525u + 1013904223u;
-
-            const uint32_t chance = sparkleRandom % 100;
-
-            if(chance < static_cast<uint32_t>(radiance * 35.0f))
-            {
-                sparkleEnvelope = 0.15f;
-
-                chimePan =
-                    (static_cast<float>(sparkleRandom % 200) / 100.0f)
-                    - 1.0f;
-            }
-
-            sparkleCounter = 0;
-        }
-
-        const float chime =
-            (crystalChime.Process() + crystalChimeHigh.Process())
-            * sparkleEnvelope;
-
-        sparkleEnvelope *= 0.99998f;
-
-        if(sparkleEnvelope < 0.001f)
-            sparkleEnvelope = 0.0f;
 
         const float delayed = crystalDelay.Read();
 
         crystalDelay.Write(shimmer * 0.7f + delayed * 0.30f);
 
         const float refractionAmount = refraction * 0.5f;
-        const float chimeAmount = chime * radiance * 0.005f;
-        const float panAmount = chimePan * refraction;
-
-        const float chimeLeft =
-            chimeAmount * (1.0f - panAmount);
-
-        const float chimeRight =
-            chimeAmount * (1.0f + panAmount);
 
         const float leftEffect =
             shimmer * (0.175f + refractionAmount)
-            + delayed * (0.25f - refractionAmount * 0.5f)
-            + chimeLeft;
+            + delayed * (0.25f - refractionAmount * 0.5f);
 
         const float rightEffect =
             shimmer * (0.175f - refractionAmount * 0.5f)
-            + delayed * (0.25f + refractionAmount)
-            + chimeRight;
+            + delayed * (0.25f + refractionAmount);
 
         result = {
             input + leftEffect,
@@ -129,7 +71,7 @@ CrystalStereo Crystals::Process(
         };
     }
 
-    // ACQUAMARINA
+    // ACQUAMARINA: filtered water noise
     else if(mode == daisy::Switch3::POS_UP)
     {
         const float movement = crystalLfo.Process();
@@ -179,7 +121,7 @@ CrystalStereo Crystals::Process(
         };
     }
 
-    // OSSIDIANA
+    // OSSIDIANA: dark resonant filter
     else if(mode == daisy::Switch3::POS_DOWN)
     {
         crystalDelay.SetDelay(sampleRate * 0.35f);

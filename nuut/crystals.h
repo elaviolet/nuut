@@ -1,3 +1,4 @@
+
 #pragma once
 
 #include "daisy_seed.h"
@@ -26,10 +27,8 @@ private:
     // Shared delay
     daisysp::DelayLine<float, 24000> crystalDelay;
 
-    // Ametista: octave shimmer and chimes
+    // Ametista: octave shimmer
     daisysp::PitchShifter crystalShifter;
-    daisysp::Oscillator crystalChime;
-    daisysp::Oscillator crystalChimeHigh;
 
     // Shared LFO for slow modulation
     daisysp::Oscillator crystalLfo;
@@ -44,10 +43,4 @@ private:
     // General parameters
     float sampleRate = 48000.0f;
     float aquamarineDelayTime = 0.04f;
-
-    // Ametista: sparkle generation
-    float sparkleEnvelope = 0.0f;
-    uint32_t sparkleCounter = 0;
-    uint32_t sparkleRandom = 1234567;
-    float chimePan = 0.0f;
 };
