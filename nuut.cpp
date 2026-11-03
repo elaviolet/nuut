@@ -19,7 +19,7 @@ CpuLoadMeter cpuMeter;
 
 Voice voices[14];
 
-NUUTEventBell eventBell;
+NUUTEventVoice eventVoice;
 bool eventBellTriggerPending = false;
 float eventBellFrequency = 432.0f;
 
@@ -316,6 +316,26 @@ void AudioCallback(
                     melodyCurrentFrequency = melodyNotes[0];
                     melodySamplesUntilNext = 24000;
 
+                    // Select the event timbre according to the detected aspect.
+                    switch(currentAspect)
+                    {
+                        case ASPECT_SQUARE:
+                        case ASPECT_OPPOSITION:
+                            SetNUUTEventTimbre(
+                                &eventVoice,
+                                NUUTEventTimbre::Oom);
+                            break;
+
+                        case ASPECT_CONJUNCTION:
+                        case ASPECT_SEXTILE:
+                        case ASPECT_TRINE:
+                        default:
+                            SetNUUTEventTimbre(
+                                &eventVoice,
+                                NUUTEventTimbre::CrystalBell);
+                            break;
+                    }
+
                     // Trigger the bell only when a planet is active.
                     if(AnyPadActive())
                         eventBellTriggerPending = true;
@@ -430,12 +450,13 @@ float eventModDepth = 0.0f;
            float planetSig = 0.0f;
            float constellationSig = 0.0f;
 
-            // Crystal event bell: trigger once, then let it ring.
-            float bellSig = ProcessNUUTEventBell(
-                &eventBell,
-                eventBellTriggerPending && anyPadActive,
-                eventBellFrequency
-            );
+            // Crystal event bell and Oom: same aspect-driven trigger.
+            bool eventTrigger = eventBellTriggerPending && anyPadActive;
+
+            float eventSig = ProcessNUUTEventVoice(
+                &eventVoice,
+                eventTrigger,
+                eventBellFrequency);
 
             eventBellTriggerPending = false;
 
@@ -529,8 +550,8 @@ float eventModDepth = 0.0f;
            // Combine the main and constellation signals.
            // ----------------------------------------------------
            float sig = planetSig
-                        + constellationSig * 1.10f
-                        + bellSig * 0.005f;
+                + constellationSig * 1.10f
+                + eventSig * 0.005f;
 
             // Apply the active aspect modulation.
             if(eventModDepth > 0.0f)
@@ -631,7 +652,7 @@ int main()
        float sampleRate = hw.AudioSampleRate();
        cpuMeter.Init(sampleRate, hw.AudioBlockSize());
 
-       InitNUUTEventBell(&eventBell, sampleRate);
+      InitNUUTEventVoice(&eventVoice, sampleRate);
        InitCombLP6Breath(&combLP6Breath, sampleRate);
        const int reverbInitStatus = reverb.Init(sampleRate);
 

@@ -242,3 +242,166 @@ inline float ProcessNUUTEventBell(
     return output;
 }
 
+// NUUT EVENT OOM
+// A soft, vocal-like event voice.
+struct NUUTEventOom
+{
+    static constexpr std::size_t MODE_COUNT = 6;
+
+    float y1[MODE_COUNT] = {};
+    float y2[MODE_COUNT] = {};
+
+    float coeffA[MODE_COUNT] = {};
+    float coeffB[MODE_COUNT] = {};
+
+    float sampleRate = 48000.0f;
+};
+
+inline void InitNUUTEventOom(
+    NUUTEventOom* oom,
+    float sampleRate)
+{
+    oom->sampleRate =
+        sampleRate > 0.0f ? sampleRate : 48000.0f;
+
+    for(std::size_t i = 0;
+    i < NUUTEventOom::MODE_COUNT;
+    ++i)
+        {
+            oom->y1[i] = 0.0f;
+            oom->y2[i] = 0.0f;
+            oom->coeffA[i] = 0.0f;
+            oom->coeffB[i] = 0.0f;
+        }
+}
+
+
+inline float ProcessNUUTEventOom(
+    NUUTEventOom* oom,
+    bool trigger,
+    float frequency)
+{
+    static constexpr float RATIOS[6] =
+        {1.0f, 1.85f, 3.10f, 4.45f, 5.90f, 7.20f};
+
+    static constexpr float DECAY[6] =
+        {0.30f, 0.25f, 0.20f, 0.16f, 0.12f, 0.09f};
+
+    static constexpr float EXCITATION[6] =
+        {0.35f, 0.40f, 0.38f, 0.32f, 0.25f, 0.18f};
+
+    static constexpr float WEIGHT[6] =
+        {0.08f, 0.30f, 0.48f, 0.62f, 0.70f, 0.65f};
+
+    constexpr float TWO_PI = 6.28318530718f;
+    const float sr = oom->sampleRate;
+
+    if(trigger)
+    {
+        frequency = fmaxf(180.0f, fminf(700.0f, frequency));
+
+        for(std::size_t i = 0;
+            i < NUUTEventOom::MODE_COUNT;
+            ++i)
+        {
+            const float f = fminf(
+                frequency * RATIOS[i],
+                sr * 0.40f);
+
+            const float radius =
+                expf(-1.0f / (DECAY[i] * sr));
+
+            const float omega = TWO_PI * f / sr;
+
+            oom->coeffA[i] = 2.0f * radius * cosf(omega);
+            oom->coeffB[i] = -(radius * radius);
+        }
+    }
+
+    float output = 0.0f;
+
+    for(std::size_t i = 0;
+        i < NUUTEventOom::MODE_COUNT;
+        ++i)
+    {
+        const float excitation =
+            trigger ? EXCITATION[i] : 0.0f;
+
+        const float y =
+            excitation
+            + oom->coeffA[i] * oom->y1[i]
+            + oom->coeffB[i] * oom->y2[i];
+
+        oom->y2[i] = oom->y1[i];
+        oom->y1[i] = y;
+
+        output += y * WEIGHT[i];
+    }
+
+    return output;
+}
+
+
+// ============================================================
+// NUUT EVENT VOICE SELECTOR
+// Selects exactly one event timbre at a time.
+// ============================================================
+
+enum class NUUTEventTimbre
+{
+    CrystalBell,
+    Oom
+};
+
+struct NUUTEventVoice
+{
+    NUUTEventBell bell;
+    NUUTEventOom oom;
+
+    NUUTEventTimbre timbre = NUUTEventTimbre::CrystalBell;
+    float sampleRate = 48000.0f;
+};
+
+inline void InitNUUTEventVoice(
+    NUUTEventVoice* voice,
+    float sampleRate)
+{
+    voice->sampleRate =
+        sampleRate > 0.0f ? sampleRate : 48000.0f;
+
+    voice->timbre = NUUTEventTimbre::CrystalBell;
+
+    InitNUUTEventBell(&voice->bell, voice->sampleRate);
+    InitNUUTEventOom(&voice->oom, voice->sampleRate);
+}
+
+inline void SetNUUTEventTimbre(
+    NUUTEventVoice* voice,
+    NUUTEventTimbre timbre)
+{
+    voice->timbre = timbre;
+}
+
+inline float ProcessNUUTEventVoice(
+    NUUTEventVoice* voice,
+    bool trigger,
+    float frequency)
+{
+    switch(voice->timbre)
+    {
+        case NUUTEventTimbre::CrystalBell:
+            return ProcessNUUTEventBell(
+                &voice->bell,
+                trigger,
+                frequency);
+
+        case NUUTEventTimbre::Oom:
+            return ProcessNUUTEventOom(
+                &voice->oom,
+                trigger,
+                frequency);
+
+        default:
+            return 0.0f;
+    }
+}
