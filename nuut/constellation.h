@@ -29,6 +29,19 @@ class Constellation
 {
 public:
 
+    void SetKosmos(float value)
+    {
+        value = fmaxf(0.0f, fminf(1.0f, value));
+
+        int newMode = static_cast<int>(roundf(value * 4.0f));
+
+        if(newMode != harmonyMode)
+        {
+            harmonyMode = newMode;
+            RebuildConstellation();
+        }
+    }
+
     // --------------------------------------------------------
     // INITIALIZATION
     // Stores references to the main voice array and the
@@ -214,6 +227,7 @@ private:
     // Current and previous constellation control values.
     float constellationAmount = 0.0f;
     float lastConstellationAmount = -1.0f;
+    int harmonyMode = 0;
 
     // --------------------------------------------------------
     // CHECK MAIN PAD
@@ -255,18 +269,23 @@ private:
     // the requested target frequency.
     // --------------------------------------------------------
 
-    int FindClosestPad(float targetFrequency)
+    int FindClosestPad(float targetFrequency, int excludedPad = -1)
     {
         int bestPad = -1;
         float bestDistance = 1000000.0f;
 
         for(int pad = 0; pad < 10; pad++)
         {
-            if(IsUsed(pad))
+            if(IsUsed(pad) || IsMainPad(pad) || pad == excludedPad)
                 continue;
 
-            float distance =
-                std::fabs(planets[pad].frequency - targetFrequency);
+            float semitoneDistance =
+                12.0f * log2f(planets[pad].frequency / targetFrequency);
+
+            // Compare pitch classes, ignoring octave differences.
+            semitoneDistance -= 12.0f * roundf(semitoneDistance / 12.0f);
+
+            float distance = fabsf(semitoneDistance);
 
             if(distance < bestDistance)
             {
@@ -315,6 +334,7 @@ private:
         {
             float root = planets[desiredPads[0]].frequency;
 
+            // The fifth is common to all harmony modes.
             int extra1 = FindClosestPad(root * 1.5f);
 
             if(extra1 != -1)
@@ -323,7 +343,19 @@ private:
                 desiredCount++;
             }
 
-            int extra2 = FindClosestPad(root * 2.0f);
+            // Select the second interval according to Kosmos.
+            float secondRatio = 1.25f; // Major third
+
+            switch(harmonyMode)
+            {
+                case 0: secondRatio = 1.25f;      break; // Major
+                case 1: secondRatio = 1.125f;     break; // Sus2
+                case 2: secondRatio = 1.333333f;  break; // Sus4
+                case 3: secondRatio = 1.2f;       break; // Minor
+                case 4: secondRatio = 2.0f;       break; // Power
+            }
+
+            int extra2 = FindClosestPad(root * secondRatio, extra1);
 
             if(extra2 != -1)
             {

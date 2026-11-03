@@ -49,11 +49,11 @@ bool padStates[10] = {false};
 bool holdEnabled = false;
 float transitPosition = 0.0f;
 
-constexpr int MELODY_LENGTH = 5;
+constexpr int MELODY_LENGTH = 3;
 float melodyNotes[MELODY_LENGTH] = {};
 
 int melodyStep = 0;
-int melodyLength = 5;
+int melodyLength = 3;
 
 int melodyLastAspect = ASPECT_NONE;
 int melodyLastA = -1;
@@ -62,6 +62,9 @@ int melodyLastB = -1;
 size_t melodySamplesUntilNext = 0;
 float melodyCurrentFrequency = 432.0f;
 bool melodyActive = false;
+int melodyTrillTogglesRemaining = 0;
+bool melodyTrillHigh = false;
+float melodyTrillBaseFrequency = 432.0f;
 
 bool AnyPadActive();
 
@@ -232,12 +235,11 @@ void AudioCallback(
            aspectProximity
        );
 
-       // --------------------------------------------------------
-       // MELODY GENERATION
-       // Build a note phrase when the detected aspect changes.
-       // --------------------------------------------------------
-       // --------------------------------------------------------
-
+      
+        // --------------------------------------------------------
+        // MELODY GENERATION
+        // Build a note phrase when the detected aspect changes.
+        // --------------------------------------------------------
 
         if(currentAspect != ASPECT_NONE && aspectA >= 0 && aspectB >= 0)
         {
@@ -260,125 +262,83 @@ void AudioCallback(
             aspectA != melodyLastA ||
             aspectB != melodyLastB)
             {
-                int root = static_cast<int>(roundf(
-                    69.0f + 12.0f * log2f(melodyFrequencyA / 432.0f)
-                ));
+                // Build a three-note arpeggio using the generator planet as root.
+                    // Preserve the chord intervals when transposing to the planet frequency.
+                    const float rootFrequency = melodyFrequencyA;
 
-                int target = static_cast<int>(roundf(
-                    69.0f + 12.0f * log2f(melodyFrequencyB / 432.0f)
-                ));
+                    switch(currentAspect)
+                    {
+                        case ASPECT_CONJUNCTION: // G-C-E: 0, +5, +9
+                            melodyNotes[0] = rootFrequency;
+                            melodyNotes[1] = rootFrequency * powf(2.0f, 5.0f / 12.0f);
+                            melodyNotes[2] = rootFrequency * powf(2.0f, 9.0f / 12.0f);
+                            melodyLength = 3;
+                            break;
 
-                switch(currentAspect)
-                {
-                    case ASPECT_CONJUNCTION: // 5 notes
-                        melodyNotes[0] = MelodyMidiToFrequency(root);
-                        melodyNotes[1] = MelodyMidiToFrequency(root + 2);
-                        melodyNotes[2] = MelodyMidiToFrequency(target);
-                        melodyNotes[3] = MelodyMidiToFrequency(root + 2);
-                        melodyNotes[4] = MelodyMidiToFrequency(root);
-                        melodyLength = 5;
-                        break;
+                        case ASPECT_SEXTILE: // G-C-F: 0, +5, +10
+                            melodyNotes[0] = rootFrequency;
+                            melodyNotes[1] = rootFrequency * powf(2.0f, 5.0f / 12.0f);
+                            melodyNotes[2] = rootFrequency * powf(2.0f, 10.0f / 12.0f);
+                            melodyLength = 3;
+                            break;
 
-                    case ASPECT_SEXTILE: // 3 notes
-                        melodyNotes[0] = MelodyMidiToFrequency(root);
-                        melodyNotes[1] = MelodyMidiToFrequency(root + 7);
-                        melodyNotes[2] = MelodyMidiToFrequency(target);
-                        melodyLength = 3;
-                        break;
+                        case ASPECT_TRINE: // A-C#-E: 0, +4, +7
+                            melodyNotes[0] = rootFrequency;
+                            melodyNotes[1] = rootFrequency * powf(2.0f, 4.0f / 12.0f);
+                            melodyNotes[2] = rootFrequency * powf(2.0f, 7.0f / 12.0f);
+                            melodyLength = 3;
+                            break;
 
-                    case ASPECT_SQUARE: // 5 notes
-                        melodyNotes[0] = MelodyMidiToFrequency(root);
-                        melodyNotes[1] = MelodyMidiToFrequency(target);
-                        melodyNotes[2] = MelodyMidiToFrequency(root + 6);
-                        melodyNotes[3] = MelodyMidiToFrequency(root);
-                        melodyNotes[4] = MelodyMidiToFrequency(root);
-                        melodyLength = 5;
-                        break;
+                        case ASPECT_OPPOSITION: // Bb-C#-E: 0, +4, +7
+                            melodyNotes[0] = rootFrequency;
+                            melodyNotes[1] = rootFrequency * powf(2.0f, 4.0f / 12.0f);
+                            melodyNotes[2] = rootFrequency * powf(2.0f, 7.0f / 12.0f);
+                            melodyLength = 3;
+                            break;
 
-                    case ASPECT_TRINE: // 3 notes
-                        melodyNotes[0] = MelodyMidiToFrequency(root);
-                        melodyNotes[1] = MelodyMidiToFrequency(root + 4);
-                        melodyNotes[2] = MelodyMidiToFrequency(target);
-                        melodyLength = 3;
-                        break;
+                        case ASPECT_SQUARE: // A-C#-F: 0, +4, +9
+                            melodyNotes[0] = rootFrequency;
+                            melodyNotes[1] = rootFrequency * powf(2.0f, 4.0f / 12.0f);
+                            melodyNotes[2] = rootFrequency * powf(2.0f, 9.0f / 12.0f);
+                            melodyLength = 3;
+                            break;
 
-                    case ASPECT_OPPOSITION: // 1 long note
-                        melodyNotes[0] = MelodyMidiToFrequency(target);
-                        melodyLength = 1;
-                        break;
-
-                    default:
-                        melodyLength = 0;
-                        break;
+                        default:
+                            melodyLength = 0;
+                            break;
+                    
                 }
 
                 if(melodyLength > 0)
-                    {
-                        melodyStep = 0;
-                        melodyCurrentFrequency = melodyNotes[0];
+                {
+                    // Start with the first chord note active.
+                    melodyStep = 1;
+                    melodyCurrentFrequency = melodyNotes[0];
+                    melodySamplesUntilNext = 24000;
 
-                        // Choose the bell frequency according to the aspect.
-                        // Preserve the original melody timing.
-                        switch(currentAspect)
-                        {
-                            case ASPECT_CONJUNCTION:
-                                eventBellFrequency = melodyNotes[0] * 2.0f;
-                                melodySamplesUntilNext = 9000;
-                                break;
+                    // Trigger the bell only when a planet is active.
+                    if(AnyPadActive())
+                        eventBellTriggerPending = true;
 
-                            case ASPECT_SQUARE:
-                                eventBellFrequency = melodyNotes[0] * 1.25f;
-                                melodySamplesUntilNext = 9000;
-                                break;
+                    melodyActive = true;
+                }
+                else
+                {
+                    melodyActive = false;
+                }
 
-                            case ASPECT_SEXTILE:
-                                eventBellFrequency = melodyNotes[0] * 1.5f;
-                                melodySamplesUntilNext = 12000;
-                                break;
-
-                            case ASPECT_TRINE:
-                                eventBellFrequency = melodyNotes[0] * 1.333333f;
-                                melodySamplesUntilNext = 12000;
-                                break;
-
-                            case ASPECT_OPPOSITION:
-                                eventBellFrequency = melodyNotes[0] * 1.666667f;
-                                melodySamplesUntilNext = 24000;
-                                break;
-
-                            default:
-                                eventBellFrequency = melodyNotes[0] * 2.0f;
-                                melodySamplesUntilNext = 9000;
-                                break;
-                        }
-
-                        // Trigger the bell only when a planet is active.
-                        if(AnyPadActive())
-                        {
-                            eventBellTriggerPending = true;
-                        }
-
-                        melodyActive = true;
-                    }
-                    else
-                    {
-                        melodyActive = false;
-                    }
-
-                    melodyLastAspect = currentAspect;
-                    melodyLastA = aspectA;
-                    melodyLastB = aspectB;
-                    }
+                melodyLastAspect = currentAspect;
+                melodyLastA = aspectA;
+                melodyLastB = aspectB;
             }
-            else
-            {
-                melodyActive = false;
-                melodyLastAspect = ASPECT_NONE;
-                melodyLastA = -1;
-                melodyLastB = -1;
-            }
-
-       
+        }
+        else
+        {
+            melodyActive = false;
+            melodyLastAspect = ASPECT_NONE;
+            melodyLastA = -1;
+            melodyLastB = -1;
+        }
 
        // --------------------------------------------------------
        // CONSTELLATION VOICE TRIGGERS
@@ -393,11 +353,7 @@ void AudioCallback(
            if(planet != -1 && constellation.IsExtraVoice(v))
            {
                currentConstellationActive[idx] = true;
-               // Trigger the voice only when it becomes active.
-               if(!constellationVoiceWasActive[idx])
-               {
-                   constellationVoices[idx].triggered = true;
-               }
+              
            }
        }
 
@@ -427,6 +383,48 @@ void AudioCallback(
 
        const bool anyPadActive = AnyPadActive();
 
+// EVENT MODULATION
+static float eventModPhase = 0.0f;
+
+float eventModRate = 0.0f;
+float eventModDepth = 0.0f;
+
+        if(anyPadActive)
+        {
+            switch(currentAspect)
+            {
+                case ASPECT_CONJUNCTION:
+                    eventModRate = 0.18f;
+                    eventModDepth = 0.07f;
+                    break;
+
+                case ASPECT_SEXTILE:
+                    eventModRate = 0.45f;
+                    eventModDepth = 0.04f;
+                    break;
+
+                case ASPECT_SQUARE:
+                    eventModRate = 2.0f;
+                    eventModDepth = 0.10f;
+                    break;
+
+                case ASPECT_TRINE:
+                    eventModRate = 0.12f;
+                    eventModDepth = 0.05f;
+                    break;
+
+                case ASPECT_OPPOSITION:
+                    eventModRate = 0.65f;
+                    eventModDepth = 0.08f;
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
+        const float eventModSampleRate = hw.AudioSampleRate();
+
        for(size_t i = 0; i < size; i++)
        {
            float planetSig = 0.0f;
@@ -441,38 +439,25 @@ void AudioCallback(
 
             eventBellTriggerPending = false;
 
-           // Advance the melody at roughly 0.1875-second intervals at 48 kHz.
-           if(melodyActive && AnyPadActive())
-           {
-               if(melodySamplesUntilNext > 0)
-                   --melodySamplesUntilNext;
-               if(melodySamplesUntilNext == 0)
+           
+            // Gradually add chord notes every 0.5 seconds.
+            // Previously activated notes remain active.
+            if(melodyActive && anyPadActive && melodyLength > 0)
+            {
+                if(melodyStep < melodyLength)
                 {
-                    melodyStep = (melodyStep + 1) % melodyLength;
-                    melodyCurrentFrequency = melodyNotes[melodyStep];
+                    if(melodySamplesUntilNext > 0)
+                        --melodySamplesUntilNext;
 
-                    switch(melodyLastAspect)
+                    if(melodySamplesUntilNext == 0)
                     {
-                        case ASPECT_CONJUNCTION:
-                        case ASPECT_SQUARE:
-                            melodySamplesUntilNext = 9000;
-                            break;
-
-                        case ASPECT_SEXTILE:
-                        case ASPECT_TRINE:
-                            melodySamplesUntilNext = 12000;
-                            break;
-
-                        case ASPECT_OPPOSITION:
-                            melodySamplesUntilNext = 24000;
-                            break;
-
-                        default:
-                            melodySamplesUntilNext = 9000;
-                            break;
+                        ++melodyStep;
+                        melodySamplesUntilNext = 24000;
                     }
+                }
             }
-           }
+            
+            
            for(int v = 0; v < 10; v++)
            {
                int planet = constellation.GetPlanet(v);
@@ -484,25 +469,32 @@ void AudioCallback(
                if(v >= 3)
                {
                    int idx = v - 3;
-               if(idx == 6 && melodyActive && AnyPadActive())
-               {
-                   // The seventh extra voice temporarily plays the melody.
-                   constellationVoices[idx].active = true;
-                   constellationVoices[idx].targetFrequency =
-                       melodyCurrentFrequency * originRatio;
-               }
-               else if(planet != -1 &&
-                       constellation.IsExtraVoice(v) &&
-                       AnyPadActive())
-               {
-                   constellationVoices[idx].active = true;
-                   constellationVoices[idx].targetFrequency =
-                       planets[planet].frequency * originRatio;
-               }
-               else
-               {
-                   constellationVoices[idx].active = false;
-               }
+               // Extra voices 4, 5 and 6 temporarily form the chord pad.
+                if(idx >= 4 && idx <= 6 &&
+                melodyActive && anyPadActive)
+                {
+                    int noteIndex = idx - 4;
+
+                    // Activate notes one by one, then keep them together.
+                    constellationVoices[idx].active =
+                        (melodyStep > noteIndex);
+
+                    constellationVoices[idx].targetFrequency =
+                        melodyNotes[noteIndex] * originRatio;
+                }
+                else if(planet != -1 &&
+                        constellation.IsExtraVoice(v) &&
+                        anyPadActive)
+                {
+                    constellationVoices[idx].active = true;
+                    constellationVoices[idx].targetFrequency =
+                        planets[planet].frequency * originRatio;
+                }
+                else
+                {
+                    constellationVoices[idx].active = false;
+                }
+              
                    constellationSig += ProcessPlanetConstellationVoice(
                        &constellationVoices[idx],
                        constellationVoices[idx].targetFrequency
@@ -539,6 +531,22 @@ void AudioCallback(
            float sig = planetSig
                         + constellationSig * 1.10f
                         + bellSig * 0.005f;
+
+            // Apply the active aspect modulation.
+            if(eventModDepth > 0.0f)
+            {
+                eventModPhase += eventModRate / eventModSampleRate;
+
+                if(eventModPhase >= 1.0f)
+                    eventModPhase -= 1.0f;
+
+                const float eventLfo = sinf(eventModPhase * 6.2831853f);
+
+                const float eventAmplitude =
+                    1.0f + eventLfo * eventModDepth;
+
+                sig *= eventAmplitude;
+            }
                    
 
            // ----------------------------------------------------

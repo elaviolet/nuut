@@ -11,7 +11,6 @@
 using namespace daisysp;
 
 
-
 // ============================================================
 // MAIN VOICE
 // ============================================================
@@ -29,7 +28,6 @@ struct Voice {
     float smoothedFrequency = 432.0f;
     float sampleRate = 48000.0f;
 };
-
 
 
 // ============================================================
@@ -63,13 +61,10 @@ inline void InitCombLP6Breath(
 struct PlanetConstellationVoice
 {
     Oscillator osc;
-    Oscillator fmOsc;
 
     float envelope = 0.0f;
-    float sparkleEnvelope = 0.0f;
 
     bool active = false;
-    bool triggered = false;
 
     float frequency = 432.0f;
     float targetFrequency = 432.0f;
@@ -78,7 +73,6 @@ struct PlanetConstellationVoice
 // ============================================================
 // INITIALIZATION
 // ============================================================
-
 
 
 inline void InitVoice(Voice* voice, float sampleRate)
@@ -92,7 +86,6 @@ inline void InitVoice(Voice* voice, float sampleRate)
     voice->triOsc.SetWaveform(Oscillator::WAVE_POLYBLEP_SQUARE);
     voice->triOsc.SetAmp(0.05f);
     
-
     InitNUUTModalResonator(&voice->resonator, sampleRate);
 
     voice->alchemyFilter.Init(sampleRate);
@@ -106,7 +99,6 @@ inline void InitVoice(Voice* voice, float sampleRate)
 }
 
 
-
 inline void InitPlanetConstellationVoice(
     PlanetConstellationVoice& voice,
     float sampleRate)
@@ -115,16 +107,8 @@ inline void InitPlanetConstellationVoice(
     voice.osc.SetWaveform(Oscillator::WAVE_SIN);
     voice.osc.SetAmp(0.18f);
 
-    voice.fmOsc.Init(sampleRate);
-    voice.fmOsc.SetWaveform(Oscillator::WAVE_SIN);
-    voice.fmOsc.SetFreq(5.0f);
-    voice.fmOsc.SetAmp(1.0f);
-
     voice.envelope = 0.0f;
-    voice.sparkleEnvelope = 0.0f;
-
     voice.active = false;
-    voice.triggered = false;
 
     voice.frequency = 432.0f;
     voice.targetFrequency = 432.0f;
@@ -146,25 +130,61 @@ inline float ProcessVoice(
     float rootFrequency,
     CombLP6BreathState* state)
 {
-    // Smooth frequency transitions between planetary voices
+    
+    // KOSMOS — smooth harmony transitions
     const float kosmosAmount = fmaxf(0.0f, fminf(1.0f, kosmos));
+
+    const float kosmosPosition = kosmosAmount * 4.0f;
+    const int harmonyMode = (int)kosmosPosition;
+    const float harmonyBlend = kosmosPosition - harmonyMode;
+
+    const float ratioVoice1Table[5] = {
+        1.25f,       // Major
+        1.125f,      // Sus2
+        1.333333f,   // Sus4
+        1.2f,        // Minor
+        1.5f         // Power chord
+    };
+
+    const float ratioVoice2Table[5] = {
+        1.5f,
+        1.5f,
+        1.5f,
+        1.5f,
+        2.0f
+    };
+
+    const int nextMode = (harmonyMode < 4)
+        ? harmonyMode + 1
+        : harmonyMode;
+
+    const float ratioVoice1 =
+        ratioVoice1Table[harmonyMode] +
+        (ratioVoice1Table[nextMode] - ratioVoice1Table[harmonyMode])
+        * harmonyBlend;
+
+    const float ratioVoice2 =
+        ratioVoice2Table[harmonyMode] +
+        (ratioVoice2Table[nextMode] - ratioVoice2Table[harmonyMode])
+        * harmonyBlend;
 
     float harmonicRatio = 1.0f;
 
     if(voiceIndex == 1)
-    {
-        harmonicRatio = 1.0f + kosmosAmount * 0.498307f;
-    }
+        harmonicRatio = ratioVoice1;
     else if(voiceIndex == 2)
-    {
-        harmonicRatio = 1.0f + kosmosAmount * 1.0f;
-    }
+        harmonicRatio = ratioVoice2;
 
     const float targetFrequency =
     voice->frequency * originRatio * harmonicRatio;
 
+    const float envelopeAmount = voice->envelope;
+
+    const float frequencySmoothing =
+        0.0005f + envelopeAmount * 0.0045f;
+
     voice->smoothedFrequency +=
-        (targetFrequency - voice->smoothedFrequency) * 0.001f;
+        (targetFrequency - voice->smoothedFrequency) * frequencySmoothing;
 
     const float frequency = voice->smoothedFrequency;
 
@@ -201,7 +221,7 @@ inline float ProcessVoice(
         frequency,
         morph
     );
-
+    
    // ALCHEMY — filter + comb morph
     const float dry = sig;
 
@@ -273,33 +293,14 @@ inline float ProcessPlanetConstellationVoice(
             voice->envelope = 0.0f;
     }
 
-    // Smooth frequency transition
-    voice->frequency +=
-        (targetFrequency - voice->frequency) * 0.001f;
+    
+    voice->frequency = targetFrequency;
 
     // Oscillator
     voice->osc.SetFreq(voice->frequency);
 
     float sig = voice->osc.Process();
 
-    // Sparkle trigger
-    if(voice->triggered)
-    {
-        voice->sparkleEnvelope = 1.0f;
-        voice->triggered = false;
-    }
-
-    if(voice->sparkleEnvelope > 0.0f)
-    {
-        const float sparkle = voice->fmOsc.Process() * 0.3f;
-
-        sig += sparkle * voice->sparkleEnvelope;
-
-        voice->sparkleEnvelope *= 0.995f;
-
-        if(voice->sparkleEnvelope < 0.001f)
-            voice->sparkleEnvelope = 0.0f;
-    }
 
     return sig * voice->envelope * 0.20f;
 }

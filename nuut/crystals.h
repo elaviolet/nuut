@@ -24,6 +24,9 @@ public:
     );
 
 private:
+
+    int lastMode = -1;
+    
     // Shared delay
     daisysp::DelayLine<float, 24000> crystalDelay;
 

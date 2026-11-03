@@ -42,28 +42,36 @@ CrystalStereo Crystals::Process(
     float radiance,
     bool active)
 {
+    if(mode != lastMode)
+{
+    if(mode == daisy::Switch3::POS_CENTER ||
+       mode == daisy::Switch3::POS_DOWN)
+        {
+            crystalDelay.SetDelay(sampleRate * 0.35f);
+        }
+
+    lastMode = mode;
+    }
     CrystalStereo result{input, input};
 
-    // AMETISTA: octave shimmer without sparkles
+    // AMETISTA: octave shimmer
     if(mode == daisy::Switch3::POS_CENTER)
     {
-        crystalDelay.SetDelay(sampleRate * 0.35f);
-
         const float shimmer = crystalShifter.Process(input);
-
         const float delayed = crystalDelay.Read();
 
-        crystalDelay.Write(shimmer * 0.7f + delayed * 0.30f);
+        // Soft feedback for the octave shimmer
+        crystalDelay.Write(shimmer * 0.85f + delayed * 0.45f);
 
         const float refractionAmount = refraction * 0.5f;
 
         const float leftEffect =
-            shimmer * (0.175f + refractionAmount)
-            + delayed * (0.25f - refractionAmount * 0.5f);
+            shimmer * (0.35f + refractionAmount)
+            + delayed * (0.30f - refractionAmount * 0.5f);
 
         const float rightEffect =
-            shimmer * (0.175f - refractionAmount * 0.5f)
-            + delayed * (0.25f + refractionAmount);
+            shimmer * (0.35f - refractionAmount * 0.5f)
+            + delayed * (0.30f + refractionAmount);
 
         result = {
             input + leftEffect,
@@ -124,7 +132,6 @@ CrystalStereo Crystals::Process(
     // OSSIDIANA: dark resonant filter
     else if(mode == daisy::Switch3::POS_DOWN)
     {
-        crystalDelay.SetDelay(sampleRate * 0.35f);
 
         const float delayed = crystalDelay.Read();
         const float feedback = 0.55f + radiance * 0.12f;
