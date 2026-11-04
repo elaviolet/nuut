@@ -317,22 +317,42 @@ void AudioCallback(
                     melodySamplesUntilNext = 24000;
 
                     // Select the event timbre according to the detected aspect.
-                    switch(currentAspect)
+                    switch (currentAspect)
                     {
                         case ASPECT_SQUARE:
+                            SetNUUTEventTimbre(
+                                &eventVoice,
+                                NUUTEventTimbre::TribalDrum);
+                            break;
+
                         case ASPECT_OPPOSITION:
                             SetNUUTEventTimbre(
                                 &eventVoice,
-                                NUUTEventTimbre::Oom);
+                                NUUTEventTimbre::Gong);
+
+                            // One Gong strike: use only the first note.
+                            eventBellFrequency = melodyNotes[0];
                             break;
 
                         case ASPECT_CONJUNCTION:
-                        case ASPECT_SEXTILE:
-                        case ASPECT_TRINE:
-                        default:
                             SetNUUTEventTimbre(
                                 &eventVoice,
                                 NUUTEventTimbre::CrystalBell);
+                            break;
+
+                        case ASPECT_SEXTILE:
+                            SetNUUTEventTimbre(
+                                &eventVoice,
+                                NUUTEventTimbre::String);
+                            break;
+
+                        case ASPECT_TRINE:
+                            SetNUUTEventTimbre(
+                                &eventVoice,
+                                NUUTEventTimbre::Flute);
+                            break;
+
+                        default:
                             break;
                     }
 
@@ -403,11 +423,11 @@ void AudioCallback(
 
        const bool anyPadActive = AnyPadActive();
 
-// EVENT MODULATION
-static float eventModPhase = 0.0f;
+        // EVENT MODULATION
+        static float eventModPhase = 0.0f;
 
-float eventModRate = 0.0f;
-float eventModDepth = 0.0f;
+        float eventModRate = 0.0f;
+        float eventModDepth = 0.0f;
 
         if(anyPadActive)
         {
@@ -453,16 +473,12 @@ float eventModDepth = 0.0f;
             // Crystal event bell and Oom: same aspect-driven trigger.
             bool eventTrigger = eventBellTriggerPending && anyPadActive;
 
-            float eventSig = ProcessNUUTEventVoice(
-                &eventVoice,
-                eventTrigger,
-                eventBellFrequency);
-
-            eventBellTriggerPending = false;
-
            
             // Gradually add chord notes every 0.5 seconds.
             // Previously activated notes remain active.
+
+            int stringNoteIndex = -1;
+
             if(melodyActive && anyPadActive && melodyLength > 0)
             {
                 if(melodyStep < melodyLength)
@@ -471,12 +487,31 @@ float eventModDepth = 0.0f;
                         --melodySamplesUntilNext;
 
                     if(melodySamplesUntilNext == 0)
-                    {
-                        ++melodyStep;
-                        melodySamplesUntilNext = 24000;
-                    }
+                        {
+                            ++melodyStep;
+
+                            if(melodyStep < melodyLength)
+                                stringNoteIndex = melodyStep - 1;
+
+                            melodySamplesUntilNext = 24000;
+                        }
                 }
             }
+
+           if(eventTrigger && eventVoice.timbre == NUUTEventTimbre::String)
+                stringNoteIndex = 0;
+
+            bool stringTrigger = stringNoteIndex >= 0;
+
+            float eventSig = ProcessNUUTEventVoice(
+                &eventVoice,
+                eventVoice.timbre == NUUTEventTimbre::String
+                    ? stringTrigger
+                    : eventTrigger,
+                eventBellFrequency,
+                stringNoteIndex);
+
+            eventBellTriggerPending = false;
             
             
            for(int v = 0; v < 10; v++)
@@ -492,17 +527,22 @@ float eventModDepth = 0.0f;
                    int idx = v - 3;
                // Extra voices 4, 5 and 6 temporarily form the chord pad.
                 if(idx >= 4 && idx <= 6 &&
-                melodyActive && anyPadActive)
-                {
-                    int noteIndex = idx - 4;
+                    (currentAspect == ASPECT_OPPOSITION || currentAspect == ASPECT_SEXTILE ))
+                    {
+                        constellationVoices[idx].active = false;
+                    }
+                    else if(idx >= 4 && idx <= 6 &&
+                            melodyActive && anyPadActive)
+                    {
+                        int noteIndex = idx - 4;
 
-                    // Activate notes one by one, then keep them together.
-                    constellationVoices[idx].active =
-                        (melodyStep > noteIndex);
+                        // Activate notes one by one, then keep them together.
+                        constellationVoices[idx].active =
+                            (melodyStep > noteIndex);
 
-                    constellationVoices[idx].targetFrequency =
-                        melodyNotes[noteIndex] * originRatio;
-                }
+                        constellationVoices[idx].targetFrequency =
+                            melodyNotes[noteIndex] * originRatio;
+                    }
                 else if(planet != -1 &&
                         constellation.IsExtraVoice(v) &&
                         anyPadActive)
@@ -552,6 +592,9 @@ float eventModDepth = 0.0f;
            float sig = planetSig
                 + constellationSig * 1.10f
                 + eventSig * 0.005f;
+
+                // Mic In
+                sig += in[0][i] * 0.5f;
 
             // Apply the active aspect modulation.
             if(eventModDepth > 0.0f)
