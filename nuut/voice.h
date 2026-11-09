@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "daisysp.h"
@@ -12,6 +11,18 @@ using namespace daisysp;
 
 
 // ============================================================
+// HELPERS
+// ============================================================
+
+inline float FastSin01(float phase)
+{
+    const float x = 2.0f * phase - 1.0f;
+    float y = 4.0f * x * (1.0f - fabsf(x));
+    y = 0.225f * (y * fabsf(y) - y) + y;
+    return -y;
+}
+
+// ============================================================
 // MAIN VOICE
 // ============================================================
 
@@ -20,18 +31,28 @@ struct Voice {
     Oscillator triOsc;
     NUUTModalResonator resonator;
 
+    // Not used any more: the Alchemy filter + comb now live in the
+    // global EtherealStage. Kept so other files still compile.
     Svf alchemyFilter;
+
     float alchemyLfoPhase = 0.0f;
+    float alchemyLfoInc = 0.07f / 48000.0f;
 
     float envelope = 0.0f;
     float frequency = 432.0f;
     float smoothedFrequency = 432.0f;
     float sampleRate = 48000.0f;
+
+    // Kosmos harmony ratio cache: it only changes when the knob moves,
+    // so it is not recomputed for every sample.
+    float cachedKosmos = -1.0f;
+    int cachedVoiceIndex = -1;
+    float cachedHarmonicRatio = 1.0f;
 };
 
 
 // ============================================================
-// SHARED EFFECT STATE
+// LEGACY SHARED EFFECT STATE
 // ============================================================
 
 struct CombLP6BreathState
@@ -60,6 +81,8 @@ inline void InitCombLP6Breath(
 
 struct PlanetConstellationVoice
 {
+    // Kept so other files that reference it still compile;
+    // the voice uses its own phase accumulator (see below).
     Oscillator osc;
 
     float envelope = 0.0f;
@@ -68,6 +91,11 @@ struct PlanetConstellationVoice
 
     float frequency = 432.0f;
     float targetFrequency = 432.0f;
+
+    float phase = 0.0f;
+    float invSampleRate = 1.0f / 48000.0f;
+    float attackIncrement = 1.0f / (0.03f * 48000.0f);
+    float releaseIncrement = 1.0f / (0.30f * 48000.0f);
 };
 
 // ============================================================
@@ -85,17 +113,23 @@ inline void InitVoice(Voice* voice, float sampleRate)
     voice->triOsc.Init(sampleRate);
     voice->triOsc.SetWaveform(Oscillator::WAVE_POLYBLEP_SQUARE);
     voice->triOsc.SetAmp(0.05f);
-    
+
     InitNUUTModalResonator(&voice->resonator, sampleRate);
 
     voice->alchemyFilter.Init(sampleRate);
     voice->alchemyFilter.SetFreq(2000.0f);
     voice->alchemyFilter.SetRes(0.9f);
 
+    voice->sampleRate = sampleRate;
+    voice->alchemyLfoInc = 0.07f / sampleRate;
     voice->alchemyLfoPhase = 0.0f;
     voice->envelope = 0.0f;
     voice->frequency = 432.0f;
     voice->smoothedFrequency = 432.0f;
+
+    voice->cachedKosmos = -1.0f;
+    voice->cachedVoiceIndex = -1;
+    voice->cachedHarmonicRatio = 1.0f;
 }
 
 
@@ -112,6 +146,53 @@ inline void InitPlanetConstellationVoice(
 
     voice.frequency = 432.0f;
     voice.targetFrequency = 432.0f;
+
+    voice.phase = 0.0f;
+    voice.invSampleRate = 1.0f / sampleRate;
+    voice.attackIncrement = 1.0f / (0.03f * sampleRate);
+    voice.releaseIncrement = 1.0f / (0.30f * sampleRate);
+}
+
+// ============================================================
+// KOSMOS — smooth harmony transitions
+// ============================================================
+
+inline float ComputeHarmonicRatio(float kosmos, int voiceIndex)
+{
+    if(voiceIndex != 1 && voiceIndex != 2)
+        return 1.0f;
+
+    static const float ratioVoice1Table[5] = {
+        1.25f,       // Major
+        1.125f,      // Sus2
+        1.333333f,   // Sus4
+        1.2f,        // Minor
+        1.5f         // Power chord
+    };
+
+    static const float ratioVoice2Table[5] = {
+        1.5f,
+        1.5f,
+        1.5f,
+        1.5f,
+        2.0f
+    };
+
+    const float kosmosAmount = fmaxf(0.0f, fminf(1.0f, kosmos));
+    const float kosmosPosition = kosmosAmount * 4.0f;
+    const int harmonyMode = (int)kosmosPosition;
+    const float harmonyBlend = kosmosPosition - harmonyMode;
+
+    const int nextMode = (harmonyMode < 4)
+        ? harmonyMode + 1
+        : harmonyMode;
+
+    const float* table = (voiceIndex == 1)
+        ? ratioVoice1Table
+        : ratioVoice2Table;
+
+    return table[harmonyMode]
+        + (table[nextMode] - table[harmonyMode]) * harmonyBlend;
 }
 
 // ============================================================
@@ -130,53 +211,21 @@ inline float ProcessVoice(
     float rootFrequency,
     CombLP6BreathState* state)
 {
-    
-    // KOSMOS — smooth harmony transitions
-    const float kosmosAmount = fmaxf(0.0f, fminf(1.0f, kosmos));
+    // 
+        return 0.0f;
 
-    const float kosmosPosition = kosmosAmount * 4.0f;
-    const int harmonyMode = (int)kosmosPosition;
-    const float harmonyBlend = kosmosPosition - harmonyMode;
-
-    const float ratioVoice1Table[5] = {
-        1.25f,       // Major
-        1.125f,      // Sus2
-        1.333333f,   // Sus4
-        1.2f,        // Minor
-        1.5f         // Power chord
-    };
-
-    const float ratioVoice2Table[5] = {
-        1.5f,
-        1.5f,
-        1.5f,
-        1.5f,
-        2.0f
-    };
-
-    const int nextMode = (harmonyMode < 4)
-        ? harmonyMode + 1
-        : harmonyMode;
-
-    const float ratioVoice1 =
-        ratioVoice1Table[harmonyMode] +
-        (ratioVoice1Table[nextMode] - ratioVoice1Table[harmonyMode])
-        * harmonyBlend;
-
-    const float ratioVoice2 =
-        ratioVoice2Table[harmonyMode] +
-        (ratioVoice2Table[nextMode] - ratioVoice2Table[harmonyMode])
-        * harmonyBlend;
-
-    float harmonicRatio = 1.0f;
-
-    if(voiceIndex == 1)
-        harmonicRatio = ratioVoice1;
-    else if(voiceIndex == 2)
-        harmonicRatio = ratioVoice2;
+    // KOSMOS 
+    if(voice->cachedVoiceIndex != voiceIndex
+       || voice->cachedKosmos != kosmos)
+    {
+        voice->cachedHarmonicRatio = ComputeHarmonicRatio(kosmos, voiceIndex);
+        voice->cachedKosmos = kosmos;
+        voice->cachedVoiceIndex = voiceIndex;
+    }
+    const float harmonicRatio = voice->cachedHarmonicRatio;
 
     const float targetFrequency =
-    voice->frequency * originRatio * harmonicRatio;
+        voice->frequency * originRatio * harmonicRatio;
 
     const float envelopeAmount = voice->envelope;
 
@@ -188,10 +237,10 @@ inline float ProcessVoice(
 
     const float frequency = voice->smoothedFrequency;
 
-    // ALCHEMY — slow spectral movement
+    // ALCHEMY — slow spectral movement of the resonator
     const float a = fmaxf(0.0f, fminf(1.0f, alchemy));
 
-    voice->alchemyLfoPhase += 0.07f / voice->sampleRate;
+    voice->alchemyLfoPhase += voice->alchemyLfoInc;
     if(voice->alchemyLfoPhase >= 1.0f)
         voice->alchemyLfoPhase -= 1.0f;
 
@@ -200,7 +249,7 @@ inline float ProcessVoice(
         ? (p * 4.0f - 1.0f)
         : (3.0f - p * 4.0f);
 
-   const float morph = fmaxf(0.0f, fminf(
+    const float morph = fmaxf(0.0f, fminf(
         1.0f,
         a + lfo * 0.45f * a
     ));
@@ -213,7 +262,6 @@ inline float ProcessVoice(
 
     float sig = sine + triangle;
 
-
     // Crystal Modal Resonator
     sig = ProcessNUUTModalResonator(
         &voice->resonator,
@@ -221,42 +269,24 @@ inline float ProcessVoice(
         frequency,
         morph
     );
-    
-   // ALCHEMY — filter + comb morph
-    const float dry = sig;
-
-    voice->alchemyFilter.Process(sig);
-    const float filtered = voice->alchemyFilter.Low();
-
-    const float combInput = dry * (1.0f - a) + filtered * a;
-    const float combOutput = state->comb.Process(combInput * 0.5f);
-    const float combMix = a * 0.25f;
-
-    sig = combInput * (1.0f - combMix)
-        + combOutput * combMix;
 
     sig *= 0.45f;
- 
 
     // Envelope
     const float sr = voice->sampleRate;
 
-    const float attackTime  = 0.03f + arcValue * 1.20f;
-    const float releaseTime = 0.15f + arcValue * 3.00f;
-
-    const float attackInc  = 1.0f / (attackTime * sr);
-    const float releaseInc = 1.0f / (releaseTime * sr);
-
     if(gate)
     {
-        voice->envelope += attackInc;
+        const float attackTime = 0.03f + arcValue * 1.20f;
+        voice->envelope += 1.0f / (attackTime * sr);
 
         if(voice->envelope > 1.0f)
             voice->envelope = 1.0f;
     }
     else
     {
-        voice->envelope -= releaseInc;
+        const float releaseTime = 0.15f + arcValue * 3.00f;
+        voice->envelope -= 1.0f / (releaseTime * sr);
 
         if(voice->envelope < 0.0f)
             voice->envelope = 0.0f;
@@ -269,38 +299,37 @@ inline float ProcessVoice(
 // EXTRA CONSTELLATION VOICE PROCESSING
 // ============================================================
 
-
 inline float ProcessPlanetConstellationVoice(
     PlanetConstellationVoice* voice,
     float targetFrequency)
 {
-    const float attackIncrement = 1.0f / (0.03f * 48000.0f);
-    const float releaseIncrement = 1.0f / (0.30f * 48000.0f);
+    // 
+    if(!voice->active && voice->envelope <= 0.0f)
+        return 0.0f;
 
     // Envelope
     if(voice->active)
     {
-        voice->envelope += attackIncrement;
+        voice->envelope += voice->attackIncrement;
 
         if(voice->envelope > 1.0f)
             voice->envelope = 1.0f;
     }
     else
     {
-        voice->envelope -= releaseIncrement;
+        voice->envelope -= voice->releaseIncrement;
 
         if(voice->envelope < 0.0f)
             voice->envelope = 0.0f;
     }
 
-    
     voice->frequency = targetFrequency;
 
-    // Oscillator
-    voice->osc.SetFreq(voice->frequency);
+    // Sine oscillator (own phase accumulator + fast sine)
+    voice->phase += voice->frequency * voice->invSampleRate;
+    if(voice->phase >= 1.0f)
+        voice->phase -= 1.0f;
 
-    float sig = voice->osc.Process();
-
-
-    return sig * voice->envelope * 0.20f;
+  
+    return FastSin01(voice->phase) * voice->envelope * (0.18f * 0.20f);
 }

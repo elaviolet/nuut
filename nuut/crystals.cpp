@@ -1,38 +1,75 @@
-
 #include "crystals.h"
+
+#include <cmath>
+
+namespace
+{
+
+constexpr float kDelaySlew = 0.0003f;
+
+
+inline float CrystalFastSin01(float phase)
+{
+    const float x = 2.0f * phase - 1.0f;
+    float y = 4.0f * x * (1.0f - fabsf(x));
+    y = 0.225f * (y * fabsf(y) - y) + y;
+    return -y;
+}
+
+inline float ClampDelay(float samples, float maxSamples)
+{
+    if(samples < 2.0f)
+        return 2.0f;
+    if(samples > maxSamples)
+        return maxSamples;
+    return samples;
+}
+
+inline void Advance(float& phase, float inc)
+{
+    phase += inc;
+    if(phase >= 1.0f)
+        phase -= 1.0f;
+}
+}
 
 void Crystals::Init(float sampleRate)
 {
     this->sampleRate = sampleRate;
+    invSampleRate = 1.0f / sampleRate;
 
-    // Shared delay
-    crystalDelay.Init();
-    crystalDelay.SetDelay(sampleRate * 0.35f);
+    lineL.Init();
+    lineR.Init();
 
     // Ametista: octave shimmer
-    crystalShifter.Init(sampleRate);
-    crystalShifter.SetFun(0.0f);
-    crystalShifter.SetTransposition(12.0f);
-
-    // Shared LFO
-    crystalLfo.Init(sampleRate);
-    crystalLfo.SetWaveform(daisysp::Oscillator::WAVE_SIN);
-    crystalLfo.SetFreq(0.15f);
-    crystalLfo.SetAmp(1.0f);
+    shifter.Init(sampleRate);
+    shifter.SetFun(0.0f);
+    shifter.SetTransposition(12.0f);
 
     // Ossidiana: dark resonant filter
-    crystalFilter.Init(sampleRate);
-    crystalFilter.SetFreq(500.0f);
-    crystalFilter.SetRes(0.4f);
+    darkFilter.Init(sampleRate);
+    darkFilter.SetFreq(450.0f);
+    darkFilter.SetRes(0.4f);
 
     // Acquamarina: filtered water noise
-    aquamarineNoise.Init();
+    noise.Init();
+    waterFilter.Init(sampleRate);
+    waterFilter.SetFreq(1200.0f);
+    waterFilter.SetRes(0.2f);
 
-    aquamarineNoiseFilter.Init(sampleRate);
-    aquamarineNoiseFilter.SetFreq(1200.0f);
-    aquamarineNoiseFilter.SetRes(0.2f);
+    delayL = 0.30f * sampleRate;
+    delayR = 0.30f * sampleRate;
 
-    aquamarineDelayTime = 0.04f;
+    lfoPhaseA = 0.0f;
+    lfoPhaseB = 0.37f;
+
+    shimmerDamp = 0.0f;
+    dampL = 0.0f;
+    dampR = 0.0f;
+    loopDamp = 0.0f;
+
+    counter = 0;
+    lastMode = -1;
 }
 
 CrystalStereo Crystals::Process(
@@ -42,116 +79,156 @@ CrystalStereo Crystals::Process(
     float radiance,
     bool active)
 {
-    if(mode != lastMode)
-{
-    if(mode == daisy::Switch3::POS_CENTER ||
-       mode == daisy::Switch3::POS_DOWN)
-        {
-            crystalDelay.SetDelay(sampleRate * 0.35f);
-        }
+    const float maxDelay = static_cast<float>(kLineSize - 2);
 
+    ++counter;
     lastMode = mode;
-    }
+
     CrystalStereo result{input, input};
 
-    // AMETISTA: octave shimmer
+    // --------------------------------------------------------
+    // AMETISTA: shimmering, spatial octave halo.
+    // The pitch shifter sits inside the feedback loop, so every
+    // repeat climbs another octave and the damping filter melts
+    // the top end away. Two unsynchronised wobbles on the L/R
+    // delay times keep the tail moving and wide.
+    // Loop gain is at most 0.62, so it cannot run away.
+    // --------------------------------------------------------
     if(mode == daisy::Switch3::POS_CENTER)
     {
-        const float shimmer = crystalShifter.Process(input);
-        const float delayed = crystalDelay.Read();
+        Advance(lfoPhaseA, 0.17f * invSampleRate);
+        Advance(lfoPhaseB, 0.23f * invSampleRate);
 
-        // Soft feedback for the octave shimmer
-        crystalDelay.Write(shimmer * 0.85f + delayed * 0.45f);
+        const float modA = CrystalFastSin01(lfoPhaseA);
+        const float modB = CrystalFastSin01(lfoPhaseB);
 
-        const float refractionAmount = refraction * 0.5f;
+        delayL += (0.29f * sampleRate - delayL) * kDelaySlew;
+        delayR += (0.41f * sampleRate - delayR) * kDelaySlew;
 
-        const float leftEffect =
-            shimmer * (0.35f + refractionAmount)
-            + delayed * (0.30f - refractionAmount * 0.5f);
+        const float wobble = 0.0025f * sampleRate;
+        const float tapL
+            = lineL.Read(ClampDelay(delayL + modA * wobble, maxDelay));
+        const float tapR
+            = lineR.Read(ClampDelay(delayR + modB * wobble, maxDelay));
 
-        const float rightEffect =
-            shimmer * (0.35f - refractionAmount * 0.5f)
-            + delayed * (0.30f + refractionAmount);
+        const float feedback = 0.30f + refraction * 0.32f;
+        const float fbMono   = (tapL + tapR) * 0.5f;
+
+        float shifterIn = input * 0.6f + fbMono * feedback;
+        const float shifted = shifter.Process(shifterIn);
+
+        shimmerDamp += 0.40f * (shifted - shimmerDamp);
+
+        lineL.Write(shimmerDamp);
+        lineR.Write(shimmerDamp);
+
+        // A little immediate octave plus the two wide, drifting tails.
+        const float halo = shimmerDamp * 0.25f;
 
         result = {
-            input + leftEffect,
-            input + rightEffect
+            input + halo + tapL * 0.70f,
+            input + halo + tapR * 0.70f
         };
     }
 
-    // ACQUAMARINA: filtered water noise
+    // --------------------------------------------------------
+    // ACQUAMARINA: nautical ping-pong.
+    // Echoes alternate left and right, each repeat is rounded
+    // off like sound travelling through water, and the delay
+    // time sways in opposite directions on the two sides.
+    // A faint, slowly pulsing water noise is kept from before.
+    // --------------------------------------------------------
     else if(mode == daisy::Switch3::POS_UP)
     {
-        const float movement = crystalLfo.Process();
+        Advance(lfoPhaseA, 0.14f * invSampleRate);
+        const float sway = CrystalFastSin01(lfoPhaseA);
 
-        // Slowly modulated water-noise envelope
-        const float wave = 0.5f + 0.5f * movement;
+        // Pulsing water-noise envelope
+        const float wave = 0.5f + 0.5f * sway;
         float noiseEnvelope = wave * wave;
         noiseEnvelope *= noiseEnvelope;
 
-        const float noise = aquamarineNoise.Process();
-        aquamarineNoiseFilter.Process(noise);
+        const float n = noise.Process();
+        waterFilter.Process(n);
+        const float noiseAmount
+            = (0.003f + radiance * 0.005f) * noiseEnvelope;
+        const float noiseSig
+            = active ? waterFilter.Low() * noiseAmount : 0.0f;
 
-        const float filteredNoise = aquamarineNoiseFilter.Low();
+        delayL += (0.36f * sampleRate - delayL) * kDelaySlew;
+        delayR += (0.36f * sampleRate - delayR) * kDelaySlew;
 
-        const float noiseAmount =
-            (0.001f + radiance * 0.002f) * noiseEnvelope;
+        const float swaySamples = sway * 0.004f * sampleRate;
+        const float tapL
+            = lineL.Read(ClampDelay(delayL + swaySamples, maxDelay));
+        const float tapR
+            = lineR.Read(ClampDelay(delayR - swaySamples, maxDelay));
 
-        const float noiseSignal =
-            active ? filteredNoise * noiseAmount : 0.0f;
+        const float feedback = 0.38f + refraction * 0.32f;
 
-        // Gentle aquatic delay movement
-        const float targetDelayTime =
-            0.040f + movement * 0.003f;
+        // Water absorbs the highs a bit more on every bounce.
+        dampL += 0.30f * (tapL - dampL);
+        dampR += 0.30f * (tapR - dampR);
 
-        aquamarineDelayTime +=
-            (targetDelayTime - aquamarineDelayTime) * 0.001f;
-
-        crystalDelay.SetDelay(aquamarineDelayTime * sampleRate);
-
-        const float delayed = crystalDelay.Read();
-        const float feedback = 0.18f + radiance * 0.08f;
-
-        crystalDelay.Write(
-            input + noiseSignal + delayed * feedback
-        );
-
-        const float refractionAmount = refraction * 0.25f;
+        // Ping-pong: input enters the left line, the right line only
+        // hears the left echoes, and the left line hears the right ones.
+        lineL.Write(input + noiseSig + dampR * feedback);
+        lineR.Write(dampL * feedback);
 
         result = {
-            input * 0.85f
-                + delayed * (0.30f + refractionAmount)
-                + noiseSignal,
-
-            input * 0.85f
-                + delayed * (0.30f - refractionAmount)
-                + noiseSignal
+            input * 0.85f + tapL * 0.55f + noiseSig,
+            input * 0.85f + tapR * 0.55f + noiseSig
         };
     }
 
-    // OSSIDIANA: dark resonant filter
+    // --------------------------------------------------------
+    // OSSIDIANA: dark, resonant, slowly breathing.
+    // A low-pass with a slow sweep sits outside the loop; a
+    // separate one-pole in the feedback makes every repeat
+    // darker. The resonant filter is not in the feedback path,
+    // so it cannot self-oscillate.
+    // --------------------------------------------------------
     else if(mode == daisy::Switch3::POS_DOWN)
     {
+        Advance(lfoPhaseA, 0.07f * invSampleRate);
+        Advance(lfoPhaseB, 0.11f * invSampleRate);
 
-        const float delayed = crystalDelay.Read();
-        const float feedback = 0.55f + radiance * 0.12f;
+        const float sweep = 0.5f + 0.5f * CrystalFastSin01(lfoPhaseA);
+        const float modB  = CrystalFastSin01(lfoPhaseB);
 
-        crystalDelay.Write(input + delayed * feedback);
+        delayL += (0.37f * sampleRate - delayL) * kDelaySlew;
+        delayR += (0.53f * sampleRate - delayR) * kDelaySlew;
 
-        crystalFilter.Process(
-            input + delayed * (0.4f + radiance * 0.15f)
-        );
+        const float wobble = 0.002f * sampleRate;
+        const float tapL
+            = lineL.Read(ClampDelay(delayL + modB * wobble, maxDelay));
+        const float tapR
+            = lineR.Read(ClampDelay(delayR - modB * wobble, maxDelay));
 
-        const float dark = crystalFilter.Low();
-        const float refractionAmount = refraction * 0.5f;
-        const float resonance = 0.55f * 0.45f + radiance * 0.25f;
+        const float fbMono   = (tapL + tapR) * 0.5f;
+        const float feedback = 0.50f + radiance * 0.20f;
+
+        loopDamp += 0.18f * (fbMono - loopDamp);
+
+        const float x = input + loopDamp * feedback;
+        lineL.Write(x);
+        lineR.Write(x);
+
+        // Slow cutoff sweep, updated every 32 samples.
+        if((counter & 31u) == 0u)
+        {
+            darkFilter.SetFreq(300.0f + sweep * 420.0f);
+            darkFilter.SetRes(0.40f + radiance * 0.20f);
+        }
+
+        darkFilter.Process(input + fbMono * (0.40f + radiance * 0.15f));
+        const float dark = darkFilter.Low();
+
+        const float body = 0.40f + refraction * 0.25f;
 
         result = {
-            input * (0.65f - refractionAmount * 0.25f)
-                + dark * (resonance + refractionAmount),
-
-            input * (0.65f + refractionAmount)
-                + dark * (resonance - refractionAmount * 0.5f)
+            input * 0.60f + dark * body + tapL * 0.28f,
+            input * 0.60f + dark * body + tapR * 0.28f
         };
     }
 

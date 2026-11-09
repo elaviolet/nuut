@@ -77,10 +77,22 @@ inline float ProcessNUUTModalResonator(
         0.041f, 0.025f, 0.053f
     };
 
+    // weight = BASE + SLOPE * alchemy (replaces the per-sample switch)
+    static constexpr float WEIGHT_BASE[NUUTModalResonator::MODE_COUNT] =
+    {
+        1.00f, 0.80f, 0.60f, 0.42f, 0.28f, 0.18f
+    };
+
+    static constexpr float WEIGHT_SLOPE[NUUTModalResonator::MODE_COUNT] =
+    {
+        0.00f, 0.20f, 0.40f, 0.48f, 0.52f, 0.57f
+    };
+
     constexpr float TWO_PI = 6.28318530718f;
     constexpr float RADIUS = 0.97f;
     constexpr float MODE_GAIN = 0.12f;
     constexpr float WET_MIX = 0.65f;
+    constexpr float UPDATE_PERIOD = 64.0f;
 
     const float a = fmaxf(0.0f, fminf(1.0f, alchemy));
     const float sr = r->sampleRate;
@@ -88,8 +100,7 @@ inline float ProcessNUUTModalResonator(
     if(baseFrequency < 20.0f)
         baseFrequency = 20.0f;
 
-    // Refresh the resonator coefficients every 64 samples.
-    // The modal frequency drift continues at the original rate.
+    // Refresh the coefficients every 64 samples.
     if(r->updateCounter == 0)
     {
         const float maxFrequency = sr * 0.42f;
@@ -116,6 +127,13 @@ inline float ProcessNUUTModalResonator(
             r->coeffA[i] = 2.0f * RADIUS * cosf(omega);
             r->coeffB[i] = -(RADIUS * RADIUS);
             r->coeffInput[i] = inputCoeff;
+
+            // The drift phase is only read here, so advance it by a whole
+            // update period at once (same result as 64 per-sample steps).
+            r->phase[i] += TWO_PI * MODE_SPEED[i] / sr * UPDATE_PERIOD;
+
+            if(r->phase[i] >= TWO_PI)
+                r->phase[i] -= TWO_PI;
         }
     }
 
@@ -127,11 +145,6 @@ inline float ProcessNUUTModalResonator(
         i < NUUTModalResonator::MODE_COUNT;
         ++i)
     {
-        r->phase[i] += TWO_PI * MODE_SPEED[i] / sr;
-
-        if(r->phase[i] >= TWO_PI)
-            r->phase[i] -= TWO_PI;
-
         const float y =
             r->coeffInput[i] * input
             + r->coeffA[i] * r->y1[i]
@@ -140,19 +153,8 @@ inline float ProcessNUUTModalResonator(
         r->y2[i] = r->y1[i];
         r->y1[i] = y;
 
-        float weight;
-
-        switch(i)
-        {
-            case 0: weight = 1.00f; break;
-            case 1: weight = 0.80f + 0.20f * a; break;
-            case 2: weight = 0.60f + 0.40f * a; break;
-            case 3: weight = 0.42f + 0.48f * a; break;
-            case 4: weight = 0.28f + 0.52f * a; break;
-            default: weight = 0.18f + 0.57f * a; break;
-        }
-
-        modalOutput += y * MODE_GAIN * weight;
+        modalOutput +=
+            y * MODE_GAIN * (WEIGHT_BASE[i] + WEIGHT_SLOPE[i] * a);
     }
 
     return input + modalOutput * WET_MIX;
