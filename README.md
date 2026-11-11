@@ -1,6 +1,7 @@
 # NUUT - Celestial Harmonic Synthesizer
 
-NUUT is an experimental polyphonic synthesizer inspired by celestial harmony and astrological relationships.
+NUUT is an experimental polyphonic synthesizer inspired by celestial harmony, astrological relationships and the idea of sound as a constellation.
+
 The instrument explores harmonic relationships, evolving polyphonic structures and crystal-inspired sound transformations.
 
 NUUT is being developed as an instrument for the Synthux Academy Touch 2, built around the Electro-Smith Daisy Seed platform.
@@ -12,7 +13,7 @@ NUUT is being developed as an instrument for the Synthux Academy Touch 2, built 
 <h3>Switches</h3>
 
 - S07-S08 - **Crystal Effect Chain** (Obsidian - down | Amethyst - center | Aquamarine - top) | Selects the active Crystal processing chain
-- S09-S10 - **Transit Mode** (Evolving | Off | Drifting) | Controls the Transit movement mode and automatic planetary movement
+- S09-S10 - **Transit Mode** (Off | Evolving | Drifting) | Controls the Transit movement mode and automatic planetary movement
 
 <h3>Knobs</h3>
 
@@ -53,12 +54,18 @@ The onboard LED lights up when Hold is active.
 Requires the [Daisy Toolchain](https://docs.daisy.audio/tutorials/cpp-dev-env/) (ARM GCC + make). On Windows, use Git Bash.
 
 ```
-git clone --recurse-submodules <repo-url>
+git clone --recurse-submodules https://github.com/elaviolet/nuut.git
 make clean && make
 make program-dfu   # with the Daisy Seed in DFU mode
 ```
 
 The binary is `build/nuut.bin`.
+
+## Download
+
+Prebuilt test firmware: [nuut.bin (v0.1)](https://github.com/elaviolet/nuut/releases/download/v0.1/nuut.bin). All versions are listed under [Releases](https://github.com/elaviolet/nuut/releases).
+
+To load it, put the Daisy Seed in DFU mode (hold BOOT, press RESET) and use the [Daisy Web Programmer](https://electro-smith.github.io/Programmer/) or `dfu-util`.
 
 ## Known limits (test firmware)
 
