@@ -11,6 +11,7 @@
 #include "nuut/aspects/aspects_engine.h"
 #include "nuut/crystals.h"
 #include "nuut/ether.h"
+#include "nuut/chord_flow.h"
 
 using namespace daisy;
 using namespace daisysp;
@@ -88,6 +89,20 @@ const ChordRatios* ChordForAspect(int aspect)
     }
 }
 
+// Aspects whose event also plays the chord pad (the extra voices 4-6 on
+// the notes of the chord). In all the other aspects those voices are
+// normal constellation voices. Remove the // to turn it on for an aspect.
+bool AspectUsesChordPad(int aspect)
+{
+    switch(aspect)
+    {
+        // case ASPECT_CONJUNCTION: return true;   // bells
+        // case ASPECT_SQUARE:      return true;   // drum
+        // case ASPECT_TRINE:       return true;   // flute
+        default: return false;
+    }
+}
+
 inline float FastTanh(float x)
 {
     if(x > 3.0f)
@@ -120,12 +135,11 @@ Switches switches;
 Constellation constellation;
 Transit transit;
 Crystals crystals;
+ChordFlow chordFlow;
 
 // ============================================================
 // GLOBAL CONTROL STATE
 // ============================================================
-// Written from the main loop (touch callbacks) and read from the
-// audio interrupt, hence volatile.
 
 volatile bool padStates[kNumPads] = {false};
 
@@ -145,7 +159,7 @@ int melodyLastAspect = ASPECT_NONE;
 int melodyLastA      = -1;
 int melodyLastB      = -1;
 
-size_t melodyNoteIntervalSamples = 24000; // set from the sample rate in main()
+size_t melodyNoteIntervalSamples = 24000; 
 size_t melodySamplesUntilNext    = 0;
 float melodyCurrentFrequency     = 432.0f;
 bool melodyActive                = false;
@@ -182,15 +196,16 @@ void OnPadTouch(uint16_t pad)
     // Pads 0-9 select planets.
     if(pad < kNumPads)
     {
-        if(holdEnabled)
+        // In Hold the pads add up like when you play them together.
+        // Touching a planet that is already held lets it go.
+        if(holdEnabled && padStates[pad])
         {
-        
-            for(uint16_t i = 0; i < kNumPads; i++)
-            {
-                padStates[i] = false;
-                constellation.ReleasePlanet(i);
-            }
+            padStates[pad] = false;
+            constellation.ReleasePlanet(pad);
+            hw.SetLed(AnyPadActive());
+            return;
         }
+
         padStates[pad] = true;
         hw.SetLed(true);
         constellation.AssignPlanet(pad);
@@ -245,6 +260,13 @@ void AudioCallback(AudioHandle::InputBuffer in,
     // --------------------------------------------------------
     const float originValue = knobs.s31().Process();
     const float arcValue    = knobs.s33().Process();
+
+    // How fast origin / Kosmos / arc are being turned: the crystals use it
+    // to stop their echoes from repeating a gliding note as a staircase.
+    static float lastKosmos = 0.0f;
+    const float kosmosNow   = knobs.s32().Process();
+    const float kosmosMoved = fabsf(kosmosNow - lastKosmos);
+    lastKosmos = kosmosNow;
 
     // --------------------------------------------------------
     // TRANSIT CONTROL
@@ -312,6 +334,15 @@ void AudioCallback(AudioHandle::InputBuffer in,
                 melodyNotes[1] = rootFrequency * chord->second;
                 melodyNotes[2] = rootFrequency * chord->third;
                 melodyLength   = 3;
+
+                SetNUUTEventChord(&eventVoice,
+                                  melodyNotes[0],
+                                  melodyNotes[1],
+                                  melodyNotes[2]);
+
+                chordFlow.NewChord(melodyNotes[0],
+                                   melodyNotes[1],
+                                   melodyNotes[2]);
             }
             else
             {
@@ -350,8 +381,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
                         break;
 
                     case ASPECT_TRINE:
-                        SetNUUTEventTimbre(&eventVoice,
-                                           NUUTEventTimbre::Flute);
+                        // The flute picks one of the chord notes by itself.
+                        SetNUUTEventTimbre(&eventVoice, NUUTEventTimbre::Flute);
                         break;
 
                     default:
@@ -385,10 +416,43 @@ void AudioCallback(AudioHandle::InputBuffer in,
     // --------------------------------------------------------
     // SOUND CONTROLS
     // --------------------------------------------------------
-    const float originSemitones = originValue * 24.0f - 12.0f;
-    const float originRatio     = powf(2.0f, originSemitones / 12.0f);
+    // Origin moves in whole semitones (with a little hysteresis so a
+    // knob resting between two steps does not flicker): turning it gives
+    // short steps instead of a long slide.
+    static float originStep = 0.0f;
+    const float originRaw   = originValue * 24.0f - 12.0f;
+    if(fabsf(originRaw - originStep) > 0.65f)
+        originStep = roundf(originRaw);
+    const float originSemitones = originStep;
 
-    const float Alchemy = knobs.s37().Process();
+    // Every origin step (and a slow turn of Kosmos) tells the crystals to
+    // let go of their old echoes, so Ametista does not repeat the old note.
+    static float lastOriginStep = 0.0f;
+    static float movementKick   = 0.0f;
+    if(originStep != lastOriginStep)
+    {
+        movementKick   = 1.0f;
+        lastOriginStep = originStep;
+    }
+    else
+    {
+        movementKick *= 0.995f;
+    }
+    crystals.SetMovement(
+        fmaxf(movementKick, (kosmosMoved - 0.0001f) * 4000.0f));
+    const float originRatio     = powf(2.0f, originSemitones / 12.0f);
+    SetNUUTEventOrigin(&eventVoice, originRatio);
+
+    // The Alchemy fader is read with a little electrical noise, and the
+    // noise is worst at the ends. Every tiny jump changes the resonator
+    // weights and the ethereal stage in one step (a click), and thousands of
+    // them are a crackle. So the value is smoothed here (about 80 ms).
+    static float alchemySmoothed = 0.0f;
+    const float alchemyRaw       = knobs.s37().Process();
+    alchemySmoothed += 0.012f * (alchemyRaw - alchemySmoothed);
+    // The bottom 20% of the fader range is cut: it starts from 0.2, so
+    // the lowest position is no longer the problematic "all down".
+    const float Alchemy = 0.2f + 0.8f * alchemySmoothed;
     ethereal.SetAlchemy(Alchemy);
 
     const float crystalRefraction = knobs.s34().Process();
@@ -397,7 +461,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
     const float crystalDry        = 1.0f - crystalWet;
     const auto crystalMode        = switches.A();
 
-    const float kosmos = knobs.s32().Process();
+    const float kosmos = kosmosNow;
 
     // --------------------------------------------------------
     // MELODY TIMER (advanced once per block)
@@ -415,7 +479,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
         else
         {
             ++melodyStep;
-            if(melodyStep < melodyLength)
+            if(melodyStep <= melodyLength)
                 stringNoteIndex = melodyStep - 1;
             melodySamplesUntilNext = melodyNoteIntervalSamples;
         }
@@ -436,6 +500,11 @@ void AudioCallback(AudioHandle::InputBuffer in,
     // Constellation lookups and voice activation are resolved
     // here instead of once per sample per voice.
     // --------------------------------------------------------
+    const float sampleRate = hw.AudioSampleRate();
+    // In Hold the chord stays still: no more notes moving up and down.
+    chordFlow.SetFrozen(holdEnabled);
+    chordFlow.Update(static_cast<float>(size) / sampleRate);
+
     bool mainGate[kNumMainVoices];
     for(int v = 0; v < kNumMainVoices; v++)
     {
@@ -443,8 +512,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
         mainGate[v]      = (planet != -1) && padStates[planet];
     }
 
-    const bool chordBlocked = (currentAspect == ASPECT_OPPOSITION
-                               || currentAspect == ASPECT_SEXTILE);
+    const bool chordPad = melodyActive && anyPadActive
+                          && AspectUsesChordPad(currentAspect);
 
     for(int idx = 0; idx < kNumExtraVoices; idx++)
     {
@@ -453,18 +522,21 @@ void AudioCallback(AudioHandle::InputBuffer in,
         const bool isChordVoice = idx >= kChordFirstExtra
                                   && idx <= kChordLastExtra;
 
-        if(isChordVoice && chordBlocked)
+        if(isChordVoice && chordPad)
         {
-            constellationVoices[idx].active = false;
-        }
-        else if(isChordVoice && melodyActive && anyPadActive)
-        {
+            // Chord that slowly evolves, only for the aspects chosen above.
             const int noteIndex = idx - kChordFirstExtra;
             if(noteIndex < melodyLength)
             {
-                constellationVoices[idx].active = (melodyStep > noteIndex);
+                constellationVoices[idx].active = true;
                 constellationVoices[idx].targetFrequency
-                    = melodyNotes[noteIndex] * originRatio;
+                    = chordFlow.Frequency(noteIndex) * originRatio;
+
+                // Slow entry and exit, only while it acts as a chord.
+                constellationVoices[idx].attackIncrement
+                    = 1.0f / (1.5f * sampleRate);
+                constellationVoices[idx].releaseIncrement
+                    = 1.0f / (2.0f * sampleRate);
             }
             else
             {
@@ -474,6 +546,11 @@ void AudioCallback(AudioHandle::InputBuffer in,
         else if(planet != -1 && constellation.IsExtraVoice(v)
                 && anyPadActive)
         {
+            // Normal constellation voice.
+            constellationVoices[idx].attackIncrement
+                = 1.0f / (0.03f * sampleRate);
+            constellationVoices[idx].releaseIncrement
+                = 1.0f / (0.30f * sampleRate);
             constellationVoices[idx].active = true;
             constellationVoices[idx].targetFrequency
                 = planets[planet].frequency * originRatio;
@@ -526,7 +603,6 @@ void AudioCallback(AudioHandle::InputBuffer in,
     float lfoInc = 0.0f;
     if(eventModDepth > 0.0f)
     {
-        const float sampleRate = hw.AudioSampleRate();
         const float startPhase = eventModPhase;
 
         eventModPhase += eventModRate * static_cast<float>(size) / sampleRate;
@@ -604,7 +680,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
         // CRYSTAL EFFECTS (mono in, stereo out)
         // ----------------------------------------------------
         CrystalStereo crystalSig = crystals.Process(
-            colored, crystalMode, crystalRefraction, crystalRadiance, anyPadActive);
+            colored, crystalMode, crystalRefraction, crystalRadiance, anyPadActive,
+            Alchemy);
 
         float outputL = colored * crystalDry + crystalSig.left * crystalWet;
         float outputR = colored * crystalDry + crystalSig.right * crystalWet;

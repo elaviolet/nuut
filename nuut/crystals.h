@@ -23,12 +23,16 @@ class Crystals
 public:
     void Init(float sampleRate);
 
+    // 0..1: how fast origin / Kosmos / arc are being moved right now.
+    void SetMovement(float m) { movement = m < 0.0f ? 0.0f : (m > 1.0f ? 1.0f : m); }
+
     CrystalStereo Process(
         float input,
         int mode,
         float refraction,
         float radiance,
-        bool active
+        bool active,
+        float alchemy = 0.0f   // 0..1: the more, the more explosive
     );
 
 private:
@@ -61,9 +65,37 @@ private:
 
     // Feedback damping states
     float shimmerDamp = 0.0f;
+    float shifterAccum = 0.0f;
+    float shifterPrev = 0.0f;
+    float shifterCur = 0.0f;
+    int shifterPhase = 0;
     float dampL = 0.0f;
     float dampR = 0.0f;
     float loopDamp = 0.0f;
+    float shimmerLow = 0.0f;   // low-pass used to take the rumble out of the loop
+    float lfoPhaseC = 0.71f;
+
+    // Alchemy, smoothed per sample so that moving the fader never crackles.
+    float alchemySmooth = 0.0f;
+    float panPhase = 0.0f;
+    float movement = 0.0f;
+    float movementSmooth = 0.0f;
+    float inLp = 0.0f;   // smooths the signal written into the echo lines
+
+    // Acquamarina: high-pass states of the echoes and the sea waves.
+    float hpL = 0.0f;
+    float hpR = 0.0f;
+    float wavePhaseA = 0.0f;
+    float wavePhaseB = 0.41f;
+    float waveLpL1 = 0.0f;
+    float waveLpL2 = 0.0f;
+    float waveLpR1 = 0.0f;
+    float waveLpR2 = 0.0f;
+    float waveK = 0.05f;
+    float waveGain = 1.0f;
+    float waveGate = 0.0f;
+    unsigned waveRngL = 12345u;
+    unsigned waveRngR = 67890u;
 
     unsigned counter = 0;
     int lastMode = -1;

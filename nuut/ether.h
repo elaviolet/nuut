@@ -8,9 +8,7 @@
 // ============================================================
 // NUUT ETHEREAL STAGE
 //
-// Global stage driven by the Alchemy knob. It replaces the
-// per-voice comb + filter, so it costs one comb instead of
-// three and only hears what is actually being played.
+// Global stage driven by the Alchemy knob. 
 //
 //   ProcessColor : slow-sweeping low-pass blended with a comb
 //                  filter whose delay is modulated by a very
@@ -18,16 +16,17 @@
 //   ProcessEcho  : two-tap stereo echo with darkened feedback
 //                  and a slow wobble, added to the stereo bus.
 //
-// All tuning constants are in the namespace below.
+//
 // ============================================================
 
 namespace nuut_ethereal
 {
 // Comb filter
 constexpr float kCombCenterHz = 600.0f;
-constexpr float kCombDepth    = 0.12f;  // +-12% of the delay time
-constexpr float kCombLfoHz    = 0.09f;
-constexpr float kCombFeedback = 0.80f;
+constexpr float kCombDepth    = 0.40f;  // +-40%: sweeps widely, never one fixed pitch
+constexpr float kCombLfoHz    = 0.14f;
+constexpr float kCombFeedbackMin = 0.35f;  // feedback at Alchemy = 0
+constexpr float kCombFeedbackMax = 0.60f;  // feedback at Alchemy = 1 (was 0.80: a buzz)
 constexpr float kCombDamp     = 0.45f;  // one-pole low-pass in the loop
 constexpr float kCombMaxMix   = 0.45f;  // comb amount at Alchemy = 1
 
@@ -51,9 +50,9 @@ constexpr float kEchoAlchemyFeedback  = 0.18f;
 
 constexpr std::size_t kCombLineSize = 2048;
 constexpr std::size_t kEchoLineSize = 24000;
-} 
+} // namespace nuut_ethereal
 
-
+// Cheap sine for a phase in [0, 1) (parabolic approximation + refinement).
 inline float EtherealSin01(float phase)
 {
     const float x = 2.0f * phase - 1.0f;
@@ -93,6 +92,8 @@ public:
 
         combDamp_ = 0.0f;
         echoDamp_ = 0.0f;
+        combLow_  = 0.0f;
+        echoLow_  = 0.0f;
         counter_  = 0;
 
         SetAlchemy(0.0f);
@@ -106,6 +107,7 @@ public:
         const float a = fmaxf(0.0f, fminf(1.0f, alchemy));
 
         combMix_      = a * kCombMaxMix;
+        combFeedback_ = kCombFeedbackMin + a * (kCombFeedbackMax - kCombFeedbackMin);
         filterMix_    = a * kFilterMaxMix;
         echoSend_     = kEchoBaseSend + a * kEchoAlchemySend;
         echoFeedback_ = kEchoBaseFeedback + a * kEchoAlchemyFeedback;
@@ -141,7 +143,9 @@ public:
 
         const float d = combLine_.Read(delay);
         combDamp_ += kCombDamp * (d - combDamp_);
-        combLine_.Write(x * 0.5f + combDamp_ * kCombFeedback);
+        // Low rumble is taken out of the loop (it would pile up as a hum).
+        combLow_ += 0.03f * (combDamp_ - combLow_);
+        combLine_.Write(x * 0.5f + (combDamp_ - combLow_) * combFeedback_);
 
         return x + (d - x) * combMix_;
     }
@@ -169,7 +173,9 @@ public:
 
         // Each repeat gets a little darker.
         echoDamp_ += kEchoDamp * ((tapL + tapR) * 0.5f - echoDamp_);
-        echoLine_.Write(in + echoDamp_ * echoFeedback_);
+        // Same here: the echo loop must not build up low rumble.
+        echoLow_ += 0.02f * (echoDamp_ - echoLow_);
+        echoLine_.Write(in + (echoDamp_ - echoLow_) * echoFeedback_);
 
         left  = tapL * echoSend_;
         right = tapR * echoSend_;
@@ -195,8 +201,11 @@ private:
 
     float combDamp_ = 0.0f;
     float echoDamp_ = 0.0f;
+    float combLow_  = 0.0f;
+    float echoLow_  = 0.0f;
 
     float combMix_      = 0.0f;
+    float combFeedback_ = 0.35f;
     float filterMix_    = 0.0f;
     float echoSend_     = 0.10f;
     float echoFeedback_ = 0.42f;

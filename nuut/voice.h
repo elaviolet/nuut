@@ -212,6 +212,7 @@ inline float ProcessVoice(
     CombLP6BreathState* state)
 {
     // 
+    if(!gate && voice->envelope <= 0.0f)
         return 0.0f;
 
     // KOSMOS 
@@ -249,10 +250,9 @@ inline float ProcessVoice(
         ? (p * 4.0f - 1.0f)
         : (3.0f - p * 4.0f);
 
-    const float morph = fmaxf(0.0f, fminf(
-        1.0f,
-        a + lfo * 0.45f * a
-    ));
+
+    const float morphRaw = fmaxf(0.0f, fminf(1.0f, a + lfo * 0.45f * a));
+    const float morph = 0.30f + 0.70f * morphRaw;
 
     voice->osc.SetFreq(frequency);
     voice->triOsc.SetFreq(frequency * 0.5f);

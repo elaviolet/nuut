@@ -3,6 +3,8 @@ TARGET = nuut
 
 USE_DAISYSP_LGPL = 1
 
+OPT = -Os
+
 # Sources
 CPP_SOURCES = nuut.cpp $(wildcard touch/*.cpp) $(wildcard nuut/*.cpp)
 
