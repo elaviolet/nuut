@@ -3,7 +3,7 @@
 // How much lighter the shimmer is made: 1 = full rate (heaviest),
 // 2 = half, 3 = a third, 4 = a quarter. 2 keeps the shimmer clean; 3 is
 // lighter but can sound rougher.
-static constexpr int kShimmerDecimate = 3;
+static constexpr int kShimmerDecimate = 4;
 
 #include <cmath>
 
@@ -77,7 +77,7 @@ void Crystals::Init(float sampleRate)
     lineR.Init();
 
     // Ametista: octave shimmer
-    // The shimmer runs at half the sample rate: it is the heaviest part of
+    // The shimmer runs at a quarter of the sample rate (kShimmerDecimate): it is the heaviest part of
     // the whole effect and the top end is rounded off anyway.
     shifter.Init(sampleRate / static_cast<float>(kShimmerDecimate));
     shifter.SetFun(0.0f);
@@ -138,7 +138,8 @@ CrystalStereo Crystals::Process(
     // brighter tails, deeper movement, a wider stereo image.
     // It is smoothed here, per sample, so that moving the fader does not
     // make the delay times or the filters jump (that sounds like crackle).
-
+    // NOTE: the crystals ignore Alchemy for now (it is handled by the
+    // global ethereal stage). Set kCrystalsUseAlchemy to true to bring it back.
     constexpr bool kCrystalsUseAlchemy = true;
     const float aTarget
         = !kCrystalsUseAlchemy ? 0.0f
@@ -174,12 +175,18 @@ CrystalStereo Crystals::Process(
     // --------------------------------------------------------
     if(mode == daisy::Switch3::POS_CENTER)
     {
-        Advance(lfoPhaseA, (0.17f + a * 0.20f) * invSampleRate);
-        Advance(lfoPhaseB, (0.23f + a * 0.25f) * invSampleRate);
-        Advance(lfoPhaseC, 0.043f * invSampleRate);
+        // The wobbles are very slow (0.2 Hz): refresh them every 8 samples
+        // instead of every sample. Inaudible, and it saves the two sines.
+        if((counter & 7u) == 0u)
+        {
+            Advance(lfoPhaseA, (0.17f + a * 0.20f) * invSampleRate * 8.0f);
+            Advance(lfoPhaseB, (0.23f + a * 0.25f) * invSampleRate * 8.0f);
+            amethystModA = CrystalFastSin01(lfoPhaseA);
+            amethystModB = CrystalFastSin01(lfoPhaseB);
+        }
 
-        const float modA = CrystalFastSin01(lfoPhaseA);
-        const float modB = CrystalFastSin01(lfoPhaseB);
+        const float modA = amethystModA;
+        const float modB = amethystModB;
 
         // The shimmer stays exactly one octave up: no pitch wobble.
 

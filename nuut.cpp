@@ -9,6 +9,7 @@
 #include "nuut/planets.h"
 #include "nuut/constellation.h"
 #include "nuut/aspects/aspects_engine.h"
+#include "nuut/events.h"
 #include "nuut/crystals.h"
 #include "nuut/ether.h"
 #include "nuut/chord_flow.h"
@@ -38,6 +39,11 @@ constexpr int kChordLastExtra  = 6;
 
 constexpr int kHoldPad = 11;
 
+// Pad 10 is a modifier: while it is held, the Alchemy fader
+// controls the waveform of the main voices instead of Alchemy.
+constexpr int kShiftPad = 10;
+volatile bool shiftHeld = false;
+
 constexpr float kTwoPi = 6.2831853f;
 
 // Transit 
@@ -45,8 +51,8 @@ constexpr float kTransitSlowPerSample = 0.00005f / 48.0f;
 constexpr float kTransitFastPerSample = 0.00015f / 48.0f;
 
 constexpr float kConstellationGain = 1.10f;
-constexpr float kEventGain         = 0.005f;
-constexpr float kMicGain           = 0.5f;
+constexpr float kEventGain         = 0.008f;
+constexpr float kMicGain           = 0.25f;
 
 // Reverb
 constexpr float kReverbFeedback    = 0.93f;
@@ -58,50 +64,8 @@ constexpr float kOutputGain        = 0.7f;
 constexpr float kMelodyNoteSeconds = 0.5f;
 
 
-constexpr float kSemi4  = 1.259921f;
-constexpr float kSemi5  = 1.334840f;
-constexpr float kSemi7  = 1.498307f;
-constexpr float kSemi9  = 1.681793f;
-constexpr float kSemi10 = 1.781797f;
-
-struct ChordRatios
-{
-    float second;
-    float third;
-};
-
-constexpr ChordRatios kChordConjunction = {kSemi5, kSemi9};  // 0, +5, +9
-constexpr ChordRatios kChordSextile     = {kSemi5, kSemi10}; // 0, +5, +10
-constexpr ChordRatios kChordTrine       = {kSemi4, kSemi7};  // 0, +4, +7
-constexpr ChordRatios kChordOpposition  = {kSemi4, kSemi7};  // 0, +4, +7
-constexpr ChordRatios kChordSquare      = {kSemi4, kSemi9};  // 0, +4, +9
-
-const ChordRatios* ChordForAspect(int aspect)
-{
-    switch(aspect)
-    {
-        case ASPECT_CONJUNCTION: return &kChordConjunction;
-        case ASPECT_SEXTILE: return &kChordSextile;
-        case ASPECT_TRINE: return &kChordTrine;
-        case ASPECT_OPPOSITION: return &kChordOpposition;
-        case ASPECT_SQUARE: return &kChordSquare;
-        default: return nullptr;
-    }
-}
-
-// Aspects whose event also plays the chord pad (the extra voices 4-6 on
-// the notes of the chord). In all the other aspects those voices are
-// normal constellation voices. Remove the // to turn it on for an aspect.
-bool AspectUsesChordPad(int aspect)
-{
-    switch(aspect)
-    {
-        // case ASPECT_CONJUNCTION: return true;   // bells
-        // case ASPECT_SQUARE:      return true;   // drum
-        // case ASPECT_TRINE:       return true;   // flute
-        default: return false;
-    }
-}
+// Chords, instruments, modulation and the chord pad of each aspect are
+// in nuut/events.h, in the table "ASPECT PROFILES" (one row per aspect).
 
 inline float FastTanh(float x)
 {
@@ -140,8 +104,15 @@ ChordFlow chordFlow;
 // ============================================================
 // GLOBAL CONTROL STATE
 // ============================================================
+// Written from the main loop (touch callbacks) and read from the
+// audio interrupt, hence volatile.
 
 volatile bool padStates[kNumPads] = {false};
+
+// Order in which the pads were touched (used in Hold: a new pad
+// replaces the oldest one when all the main voices are taken).
+volatile uint32_t padOrder[kNumPads] = {0};
+uint32_t padOrderCounter = 0;
 
 // When Hold is enabled, a selected planet remains active
 // after its touch pad is released.
@@ -159,7 +130,7 @@ int melodyLastAspect = ASPECT_NONE;
 int melodyLastA      = -1;
 int melodyLastB      = -1;
 
-size_t melodyNoteIntervalSamples = 24000; 
+size_t melodyNoteIntervalSamples = 24000; // set from the sample rate in main()
 size_t melodySamplesUntilNext    = 0;
 float melodyCurrentFrequency     = 432.0f;
 bool melodyActive                = false;
@@ -193,6 +164,12 @@ void OnPadTouch(uint16_t pad)
         return;
     }
 
+    if(pad == kShiftPad)
+    {
+        shiftHeld = true;
+        return;
+    }
+
     // Pads 0-9 select planets.
     if(pad < kNumPads)
     {
@@ -206,6 +183,30 @@ void OnPadTouch(uint16_t pad)
             return;
         }
 
+        // In Hold with every main voice taken, the new pad replaces the
+        // pad that was touched first.
+        if(holdEnabled)
+        {
+            int held = 0;
+            int oldest = -1;
+            for(int i = 0; i < kNumPads; i++)
+            {
+                if(padStates[i])
+                {
+                    ++held;
+                    if(oldest < 0 || padOrder[i] < padOrder[oldest])
+                        oldest = i;
+                }
+            }
+
+            if(held >= kNumMainVoices && oldest >= 0)
+            {
+                padStates[oldest] = false;
+                constellation.ReleasePlanet(oldest);
+            }
+        }
+
+        padOrder[pad] = ++padOrderCounter;
         padStates[pad] = true;
         hw.SetLed(true);
         constellation.AssignPlanet(pad);
@@ -218,6 +219,12 @@ void OnPadTouch(uint16_t pad)
 
 void OnPadRelease(uint16_t pad)
 {
+    if(pad == kShiftPad)
+    {
+        shiftHeld = false;
+        return;
+    }
+
     if(pad < kNumPads)
     {
         if(holdEnabled)
@@ -357,36 +364,14 @@ void AudioCallback(AudioHandle::InputBuffer in,
                 melodySamplesUntilNext = melodyNoteIntervalSamples;
 
                 // Select the event timbre according to the detected aspect.
-                switch(currentAspect)
+                const AspectProfile* profile = GetAspectProfile(currentAspect);
+                if(profile != nullptr)
                 {
-                    case ASPECT_SQUARE:
-                        SetNUUTEventTimbre(&eventVoice,
-                                           NUUTEventTimbre::TribalDrum);
-                        break;
+                    SetNUUTEventTimbre(&eventVoice, profile->timbre);
 
-                    case ASPECT_OPPOSITION:
-                        SetNUUTEventTimbre(&eventVoice, NUUTEventTimbre::Gong);
-                        // One Gong strike: use only the first note.
+                    // A single-note event (the gong) uses only the root.
+                    if(profile->singleNote)
                         eventBellFrequency = melodyNotes[0];
-                        break;
-
-                    case ASPECT_CONJUNCTION:
-                        SetNUUTEventTimbre(&eventVoice,
-                                           NUUTEventTimbre::CrystalBell);
-                        break;
-
-                    case ASPECT_SEXTILE:
-                        SetNUUTEventTimbre(&eventVoice,
-                                           NUUTEventTimbre::String);
-                        break;
-
-                    case ASPECT_TRINE:
-                        // The flute picks one of the chord notes by itself.
-                        SetNUUTEventTimbre(&eventVoice, NUUTEventTimbre::Flute);
-                        break;
-
-                    default:
-                        break;
                 }
 
                 // Trigger the bell only when a planet is active.
@@ -447,12 +432,53 @@ void AudioCallback(AudioHandle::InputBuffer in,
     // noise is worst at the ends. Every tiny jump changes the resonator
     // weights and the ethereal stage in one step (a click), and thousands of
     // them are a crackle. So the value is smoothed here (about 80 ms).
+    // Second layer: while pad 10 is held, the same fader sets the waveform
+    // morph (fader up = sine, down = saw) and Alchemy stays where it was. Each
+    // value is picked up again only when the fader crosses it, so nothing
+    // jumps when the pad is pressed or released.
+    static float alchemyFader   = 0.0f;   // stored Alchemy fader value
+    static float morphFader     = 1.0f;   // stored morph value
+    static bool  alchemyLocked  = false;
+    static bool  morphLocked    = true;
+    static bool  lastShift      = false;
     static float alchemySmoothed = 0.0f;
-    const float alchemyRaw       = knobs.s37().Process();
-    alchemySmoothed += 0.012f * (alchemyRaw - alchemySmoothed);
-    // The bottom 20% of the fader range is cut: it starts from 0.2, so
-    // the lowest position is no longer the problematic "all down".
+    static float morphSmoothedMain = 1.0f;
+
+    const float alchemyRaw = knobs.s37().Process();
+    const bool  shift      = shiftHeld;
+
+    if(shift != lastShift)
+    {
+        // The fader is now owned by the other function, which must be
+        // picked up when the fader reaches its stored value.
+        if(shift)
+            morphLocked = true;
+        else
+            alchemyLocked = true;
+        lastShift = shift;
+    }
+
+    if(!shift)
+    {
+        if(alchemyLocked && fabsf(alchemyRaw - alchemyFader) < 0.04f)
+            alchemyLocked = false;
+        if(!alchemyLocked)
+            alchemyFader = alchemyRaw;
+    }
+    else
+    {
+        if(morphLocked && fabsf(alchemyRaw - morphFader) < 0.04f)
+            morphLocked = false;
+        if(!morphLocked)
+            morphFader = alchemyRaw;
+    }
+
+    alchemySmoothed   += 0.012f * (alchemyFader - alchemySmoothed);
+    morphSmoothedMain += 0.012f * (morphFader - morphSmoothedMain);
+    // The bottom 20% of the fader range is cut: it starts from 0.2.
     const float Alchemy = 0.2f + 0.8f * alchemySmoothed;
+    // Fader all up = sine, all down = saw.
+    const float waveMorph = 1.0f - morphSmoothedMain;
     ethereal.SetAlchemy(Alchemy);
 
     const float crystalRefraction = knobs.s34().Process();
@@ -572,31 +598,23 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
     if(anyPadActive)
     {
-        switch(currentAspect)
+        const AspectProfile* modProfile = GetAspectProfile(currentAspect);
+        if(modProfile != nullptr)
         {
-            case ASPECT_CONJUNCTION:
-                eventModRate  = 0.18f;
-                eventModDepth = 0.07f;
-                break;
-            case ASPECT_SEXTILE:
-                eventModRate  = 0.45f;
-                eventModDepth = 0.04f;
-                break;
-            case ASPECT_SQUARE:
-                eventModRate  = 2.0f;
-                eventModDepth = 0.10f;
-                break;
-            case ASPECT_TRINE:
-                eventModRate  = 0.12f;
-                eventModDepth = 0.05f;
-                break;
-            case ASPECT_OPPOSITION:
-                eventModRate  = 0.65f;
-                eventModDepth = 0.08f;
-                break;
-            default:
-                break;
+            eventModRate  = modProfile->modRateHz;
+            eventModDepth = modProfile->modDepth;
         }
+    }
+
+    // Brightness of the event breathes too. When there is no aspect the
+    // last setting stays, so a ringing tail does not jump.
+    const AspectProfile* brightProfile = GetAspectProfile(currentAspect);
+    if(brightProfile != nullptr)
+    {
+        SetNUUTEventBrightness(&eventVoice,
+                               brightProfile->brightRateHz,
+                               brightProfile->brightDepthOct,
+                               brightProfile->brightCeilingHz);
     }
 
     float lfoAmp = 1.0f;
@@ -648,7 +666,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
                                       kosmos,
                                       v,
                                       voices[0].frequency,
-                                      nullptr);
+                                      nullptr,
+                                      waveMorph);
         }
 
         // Extra constellation voices.

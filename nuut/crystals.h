@@ -98,5 +98,7 @@ private:
     unsigned waveRngR = 67890u;
 
     unsigned counter = 0;
+    float amethystModA = 0.0f;
+    float amethystModB = 0.0f;
     int lastMode = -1;
 };

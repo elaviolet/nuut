@@ -14,6 +14,9 @@ using namespace daisysp;
 // HELPERS
 // ============================================================
 
+// Cheap sine for a phase in [0, 1). Parabolic approximation with one
+// refinement step (error around 0.1%, inaudible on a pad voice).
+// Much cheaper than sinf().
 inline float FastSin01(float phase)
 {
     const float x = 2.0f * phase - 1.0f;
@@ -48,11 +51,17 @@ struct Voice {
     float cachedKosmos = -1.0f;
     int cachedVoiceIndex = -1;
     float cachedHarmonicRatio = 1.0f;
+
+    // Waveform morph: own phase accumulator, smoothed morph amount.
+    float wavePhase = 0.0f;
+    float morphSmoothed = 0.0f;
 };
 
 
 // ============================================================
 // LEGACY SHARED EFFECT STATE
+// Not used by the main voices any more (the comb is global now).
+// Kept so other files that reference it still compile.
 // ============================================================
 
 struct CombLP6BreathState
@@ -197,6 +206,13 @@ inline float ComputeHarmonicRatio(float kosmos, int voiceIndex)
 
 // ============================================================
 // MAIN VOICE PROCESSING
+//
+// The voice is now just oscillators + modal resonator + envelope.
+// The Alchemy filter/comb/echo are applied globally, after the
+// voices are summed (see EtherealStage), so a voice whose gate
+// is closed and whose envelope has reached zero costs nothing.
+// The signature is unchanged; filterMod, aspect, rootFrequency
+// and state are unused.
 // ============================================================
 
 inline float ProcessVoice(
@@ -209,13 +225,14 @@ inline float ProcessVoice(
     float alchemy,
     float kosmos, int voiceIndex,
     float rootFrequency,
-    CombLP6BreathState* state)
+    CombLP6BreathState* state,
+    float waveMorph = 0.0f)
 {
-    // 
+    // Silent voice: nothing audible, skip all DSP.
     if(!gate && voice->envelope <= 0.0f)
         return 0.0f;
 
-    // KOSMOS 
+    // KOSMOS — recomputed only when the knob (or voice index) changes
     if(voice->cachedVoiceIndex != voiceIndex
        || voice->cachedKosmos != kosmos)
     {
@@ -250,14 +267,61 @@ inline float ProcessVoice(
         ? (p * 4.0f - 1.0f)
         : (3.0f - p * 4.0f);
 
+    const float morph = fmaxf(0.0f, fminf(
+        1.0f,
+        a + lfo * 0.45f * a
+    ));
 
-    const float morphRaw = fmaxf(0.0f, fminf(1.0f, a + lfo * 0.45f * a));
-    const float morph = 0.30f + 0.70f * morphRaw;
-
-    voice->osc.SetFreq(frequency);
     voice->triOsc.SetFreq(frequency * 0.5f);
 
-    float sine = voice->osc.Process();
+    // WAVEFORM MORPH: 0 = sine, 0.5 = triangle, 1 = sawtooth.
+    // One phase accumulator feeds all three shapes. The morph amount is
+    // slewed per sample, so moving the fader never clicks.
+    voice->morphSmoothed +=
+        0.002f * (fmaxf(0.0f, fminf(1.0f, waveMorph)) - voice->morphSmoothed);
+    const float m = voice->morphSmoothed;
+
+    const float dt = frequency * (1.0f / voice->sampleRate);
+    voice->wavePhase += dt;
+    if(voice->wavePhase >= 1.0f)
+        voice->wavePhase -= 1.0f;
+    const float ph = voice->wavePhase;
+
+    float wave = FastSin01(ph);
+    if(m > 0.001f)
+    {
+        // Triangle, phase-aligned with the sine (little aliasing, so it
+        // is left naive).
+        float q = ph + 0.25f;
+        if(q >= 1.0f)
+            q -= 1.0f;
+        const float tri = 1.0f - 4.0f * fabsf(q - 0.5f);
+        // Sawtooth with a PolyBLEP correction at its jump. Its phase is
+        // shifted by half a turn so that it rises through zero together
+        // with the sine.
+        float ps = ph + 0.5f;
+        if(ps >= 1.0f)
+            ps -= 1.0f;
+        float saw = 2.0f * ps - 1.0f;
+        if(ps < dt)
+        {
+            const float t = ps / dt;
+            saw -= t + t - t * t - 1.0f;
+        }
+        else if(ps > 1.0f - dt)
+        {
+            const float t = (ps - 1.0f) / dt;
+            saw -= t * t + t + t + 1.0f;
+        }
+
+        // Levels matched to the sine (the saw is brighter, so lower).
+        if(m < 0.5f)
+            wave += (tri * 0.90f - wave) * (m * 2.0f);
+        else
+            wave = tri * 0.90f + (saw * 0.40f - tri * 0.90f) * (m * 2.0f - 1.0f);
+    }
+
+    const float sine = wave * 0.40f;
     float triangle = voice->triOsc.Process();
 
     float sig = sine + triangle;
@@ -303,7 +367,7 @@ inline float ProcessPlanetConstellationVoice(
     PlanetConstellationVoice* voice,
     float targetFrequency)
 {
-    // 
+    // Silent and not active: nothing to compute.
     if(!voice->active && voice->envelope <= 0.0f)
         return 0.0f;
 
@@ -330,6 +394,6 @@ inline float ProcessPlanetConstellationVoice(
     if(voice->phase >= 1.0f)
         voice->phase -= 1.0f;
 
-  
+    // 0.18 oscillator amplitude * 0.20 output gain, as in the original.
     return FastSin01(voice->phase) * voice->envelope * (0.18f * 0.20f);
 }
