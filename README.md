@@ -1,10 +1,8 @@
 # NUUT - Celestial Harmonic Synthesizer
 
-NUUT is an experimental polyphonic synthesizer inspired by celestial harmony, astrological relationships and the idea of sound as a constellation.
+NUUT is an experimental polyphonic generative synthesizer for the Synthux Academy Touch 2, built on the Electro-Smith Daisy Seed.
 
-The instrument explores harmonic relationships, evolving polyphonic structures and crystal-inspired sound transformations.
-
-NUUT is being developed as an instrument for the Synthux Academy Touch 2, built around the Electro-Smith Daisy Seed platform.
+Inspired by celestial harmony, planetary motion, astrological aspects and crystals.
 
 ## Controls
 
@@ -67,9 +65,6 @@ Prebuilt test firmware: [nuut.bin (v0.1)](https://github.com/elaviolet/nuut/rele
 
 To load it, put the Daisy Seed in DFU mode (hold BOOT, press RESET) and use the [Daisy Web Programmer](https://electro-smith.github.io/Programmer/) or `dfu-util`.
 
-## Known limits (test firmware)
-
-- With 3 pads, high Alchemy and the Amethyst crystal, the CPU can reach about 99-100% and an occasional light crackle may be heard.
 
 ## License
 
