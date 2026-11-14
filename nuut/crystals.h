@@ -94,6 +94,8 @@ private:
     float waveK = 0.05f;
     float waveGain = 1.0f;
     float waveGate = 0.0f;
+    float swellHeldL = 0.0f; // sea swell, refreshed every 16 samples
+    float swellHeldR = 0.0f;
     unsigned waveRngL = 12345u;
     unsigned waveRngR = 67890u;
 

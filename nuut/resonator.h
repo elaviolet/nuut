@@ -25,6 +25,8 @@ struct NUUTModalResonator
     float coeffA[MODE_COUNT] = {};
     float coeffB[MODE_COUNT] = {};
     float coeffInput[MODE_COUNT] = {};
+    // MODE_GAIN * mode weight, refreshed together with the coefficients.
+    float modeGain[MODE_COUNT] = {};
 
     std::size_t updateCounter = 0;
     float sampleRate = 48000.0f;
@@ -51,6 +53,7 @@ inline void InitNUUTModalResonator(
         resonator->coeffA[i] = 0.0f;
         resonator->coeffB[i] = 0.0f;
         resonator->coeffInput[i] = 0.0f;
+        resonator->modeGain[i] = 0.0f;
     }
 }
 
@@ -133,6 +136,10 @@ inline float ProcessNUUTModalResonator(
             const float lowScale
                 = omega < 0.0393f ? sinf(omega) / 0.0393f : 1.0f;
             r->coeffInput[i] = inputCoeff * lowScale;
+            // Weight of this mode (it depends on Alchemy, which moves slowly):
+            // computed here once per 64 samples instead of for every sample.
+            r->modeGain[i]
+                = MODE_GAIN * (WEIGHT_BASE[i] + WEIGHT_SLOPE[i] * a);
 
             // The drift phase is only read here, so advance it by a whole
             // update period at once (same result as 64 per-sample steps).
@@ -159,8 +166,7 @@ inline float ProcessNUUTModalResonator(
         r->y2[i] = r->y1[i];
         r->y1[i] = y;
 
-        modalOutput +=
-            y * MODE_GAIN * (WEIGHT_BASE[i] + WEIGHT_SLOPE[i] * a);
+        modalOutput += y * r->modeGain[i];
     }
 
     return input + modalOutput * WET_MIX;

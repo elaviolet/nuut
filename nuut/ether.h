@@ -8,7 +8,9 @@
 // ============================================================
 // NUUT ETHEREAL STAGE
 //
-// Global stage driven by the Alchemy knob. 
+// Global stage driven by the Alchemy knob. It replaces the
+// per-voice comb + filter, so it costs one comb instead of
+// three and only hears what is actually being played.
 //
 //   ProcessColor : slow-sweeping low-pass blended with a comb
 //                  filter whose delay is modulated by a very
@@ -16,7 +18,7 @@
 //   ProcessEcho  : two-tap stereo echo with darkened feedback
 //                  and a slow wobble, added to the stereo bus.
 //
-//
+// All tuning constants are in the namespace below.
 // ============================================================
 
 namespace nuut_ethereal
@@ -36,6 +38,9 @@ constexpr float kFilterSweepHz  = 900.0f;
 constexpr float kFilterLfoHz    = 0.057f;
 constexpr float kFilterRes      = 0.45f;
 constexpr float kFilterMaxMix   = 0.55f;
+// Brightness: a little of the SAME filter's band-pass output is added on top
+// (no extra filter, so no extra CPU). It comes in when the fader goes DOWN.
+constexpr float kBrightMaxGain  = 0.12f;
 
 // Stereo echo
 constexpr float kEchoTimeL            = 0.31f;  // seconds
@@ -113,6 +118,13 @@ public:
         echoFeedback_ = kEchoBaseFeedback + a * kEchoAlchemyFeedback;
     }
 
+    // Brightness 0..1 (0 = Alchemy fader up, 1 = fully down).
+    void SetBrightness(float b)
+    {
+        b = fmaxf(0.0f, fminf(1.0f, b));
+        brightGain_ = b * b * nuut_ethereal::kBrightMaxGain;
+    }
+
     // Mono in, mono out: low-pass + modulated comb.
     float ProcessColor(float in)
     {
@@ -135,7 +147,10 @@ public:
 
         filter_.Process(in);
         const float low = filter_.Low();
-        const float x   = in + (low - in) * filterMix_;
+        float x = in + (low - in) * filterMix_;
+        // Brightness (only when Alchemy is raised): band-pass of the same filter.
+        if(brightGain_ > 0.003f)
+            x += filter_.Band() * brightGain_;
 
         // Comb with a slowly modulated, fractionally interpolated delay.
         const float lfo   = EtherealSin01(combPhase_);
@@ -207,6 +222,7 @@ private:
     float combMix_      = 0.0f;
     float combFeedback_ = 0.35f;
     float filterMix_    = 0.0f;
+    float brightGain_   = 0.0f;
     float echoSend_     = 0.10f;
     float echoFeedback_ = 0.42f;
 

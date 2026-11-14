@@ -263,19 +263,25 @@ CrystalStereo Crystals::Process(
         // Sea waves
         // Slow, relaxed waves (about 18 s and 25 s). The right side
         // gets the same waves a little later, so the sea rolls across.
-        Advance(wavePhaseA, 0.055f * invSampleRate);
-        Advance(wavePhaseB, 0.040f * invSampleRate);
-        float phaseAR = wavePhaseA + 0.30f;
-        float phaseBR = wavePhaseB + 0.55f;
-        if(phaseAR >= 1.0f)
-            phaseAR -= 1.0f;
-        if(phaseBR >= 1.0f)
-            phaseBR -= 1.0f;
-        const float swellL
-            = 0.60f * WaveShape(wavePhaseA) + 0.50f * WaveShape(wavePhaseB);
-        const float swellR
-            = 0.60f * WaveShape(phaseAR) + 0.50f * WaveShape(phaseBR);
-        const float swell = 0.5f * (swellL + swellR);
+        // The waves are so slow that they are refreshed every 16 samples.
+        if((counter & 15u) == 0u)
+        {
+            Advance(wavePhaseA, 0.055f * invSampleRate * 16.0f);
+            Advance(wavePhaseB, 0.040f * invSampleRate * 16.0f);
+            float phaseAR = wavePhaseA + 0.30f;
+            float phaseBR = wavePhaseB + 0.55f;
+            if(phaseAR >= 1.0f)
+                phaseAR -= 1.0f;
+            if(phaseBR >= 1.0f)
+                phaseBR -= 1.0f;
+            swellHeldL
+                = 0.60f * WaveShape(wavePhaseA) + 0.50f * WaveShape(wavePhaseB);
+            swellHeldR
+                = 0.60f * WaveShape(phaseAR) + 0.50f * WaveShape(phaseBR);
+        }
+        const float swellL = swellHeldL;
+        const float swellR = swellHeldR;
+        const float swell  = 0.5f * (swellL + swellR);
 
         // Brighter at the crest of the wave (cutoff updated every 32 samples).
         if((counter & 31u) == 0u)
@@ -292,15 +298,15 @@ CrystalStereo Crystals::Process(
         waveGate += (gateTarget > waveGate ? 0.00008f : 0.00001f)
                     * (gateTarget - waveGate);
 
+        // One noise source for both sides (the two sides differ by their
+        // swell): half the work of before.
         waveLpL1 += waveK * (NoiseFromState(waveRngL) - waveLpL1);
         waveLpL2 += waveK * (waveLpL1 - waveLpL2);
-        waveLpR1 += waveK * (NoiseFromState(waveRngR) - waveLpR1);
-        waveLpR2 += waveK * (waveLpR1 - waveLpR2);
 
         const float seaLevel
             = (0.14f + a * 0.08f) * waveGate;
         const float seaL = waveLpL2 * waveGain * seaLevel * swellL;
-        const float seaR = waveLpR2 * waveGain * seaLevel * swellR;
+        const float seaR = waveLpL2 * waveGain * seaLevel * swellR;
 
         // Ping-pong at two different times.
         delayL += (0.21f * sampleRate - delayL) * kDelaySlew;
@@ -312,7 +318,7 @@ CrystalStereo Crystals::Process(
         const float tapR
             = lineR.Read(ClampDelay(delayR - swaySamples, maxDelay));
 
-        const float feedback = (0.45f + refraction * 0.30f + a * 0.12f) * duck;
+        const float feedback = (0.38f + refraction * 0.24f + a * 0.06f) * duck;
 
         // Each bounce: the highs are absorbed (low-pass) and the lows
         // thin out (high-pass), so the echoes get airy and watery.
@@ -325,8 +331,12 @@ CrystalStereo Crystals::Process(
         // resonators would otherwise repeat as a crackle.
         inLp += 0.35f * (input - inLp);
 
-        lineL.Write(inLp + (dampR - hpR) * feedback);
-        lineR.Write((dampL - hpL) * feedback);
+        // Soft limiter inside the loop: a loud event can never pile up in the
+        // echoes and turn into a crackle (it is transparent at normal levels).
+        const float inL = inLp + (dampR - hpR) * feedback;
+        const float inR = (dampL - hpL) * feedback;
+        lineL.Write(inL / (1.0f + 0.35f * fabsf(inL)));
+        lineR.Write(inR / (1.0f + 0.35f * fabsf(inR)));
 
         // The wider Radiance is, the harder the echoes bounce to one side.
         // Real ping-pong: one echo hard left, the next hard right.

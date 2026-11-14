@@ -341,6 +341,15 @@ inline float ProcessNUUTEventBell(
             bell->y2[n][i] = bell->y1[n][i];
             bell->y1[n][i] = y;
 
+            // A mode that has rung out is switched off (it would otherwise be
+            // computed forever, at no audible effect, and cost a lot of CPU).
+            if(fabsf(y) < 1e-7f && fabsf(bell->y2[n][i]) < 1e-7f)
+            {
+                bell->modeOn[n][i] = false;
+                bell->y1[n][i] = 0.0f;
+                bell->y2[n][i] = 0.0f;
+            }
+
             output += y * WEIGHT[i];
         }
     }

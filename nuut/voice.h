@@ -5,6 +5,8 @@
 #include "resonator.h"
 
 #include <cmath>
+#include <cstring>
+#include <cstdint>
 #include <cstddef>
 
 using namespace daisysp;
@@ -55,6 +57,9 @@ struct Voice {
     // Waveform morph: own phase accumulator, smoothed morph amount.
     float wavePhase = 0.0f;
     float morphSmoothed = 0.0f;
+
+    // Alchemy FM index (radians), smoothed per sample.
+    float fmSmoothed = 0.0f;
 };
 
 
@@ -162,46 +167,138 @@ inline void InitPlanetConstellationVoice(
     voice.releaseIncrement = 1.0f / (0.30f * sampleRate);
 }
 
+// Small replacements for log2f / exp2f: calling those pulls extra library code
+// into the flash, which is very tight. Accurate to far better than 1 cent.
+inline float NuutLog2(float x)
+{
+    uint32_t bits;
+    std::memcpy(&bits, &x, sizeof(bits));
+    int e = static_cast<int>((bits >> 23) & 255u) - 127;
+    bits  = (bits & 0x007FFFFFu) | 0x3F800000u;   // mantissa in [1, 2)
+    float m;
+    std::memcpy(&m, &bits, sizeof(m));
+    if(m > 1.41421356f)
+    {
+        m *= 0.5f;
+        e += 1;
+    }
+    const float z  = (m - 1.0f) / (m + 1.0f);
+    const float z2 = z * z;
+    const float ln = 2.0f * z
+                     * (1.0f + z2 * (1.0f / 3.0f + z2 * (1.0f / 5.0f + z2 * (1.0f / 7.0f))));
+    return static_cast<float>(e) + ln * 1.44269504f;
+}
+
+inline float NuutExp2(float y)
+{
+    return expf(y * 0.69314718f);
+}
+
 // ============================================================
-// KOSMOS — smooth harmony transitions
+// KOSMOS - chords built on the root (voice 1)
+//
+// Kosmos picks one of nine chords. The first voice is the root and
+// never moves. Every other voice keeps its own planet pitch, but is
+// moved by the smallest number of semitones onto the nearest note of
+// the chord, counted from the root. So each voice stays in its own
+// register and the chord is always in tune.
 // ============================================================
 
-inline float ComputeHarmonicRatio(float kosmos, int voiceIndex)
+// Zone 0 is "Planets": Kosmos off, every voice plays its own Cousto note.
+// Zones 1..9 are the nine chords below.
+constexpr int kKosmosChords = 9;
+constexpr int kKosmosZones  = kKosmosChords + 1;
+
+// Pitch classes of each chord, as bits: bit n = n semitones above the root.
+// Chords (zones 1..9): Power, Sus4, Sus2, Minor, Min7, Major, Maj7, Add9, Lydian
+constexpr unsigned kKosmosChord[kKosmosChords] = {
+    (1u << 0) | (1u << 7),                                          // Power:  0 7
+    (1u << 0) | (1u << 5) | (1u << 7),                              // Sus4:   0 5 7
+    (1u << 0) | (1u << 2) | (1u << 7),                              // Sus2:   0 2 7
+    (1u << 0) | (1u << 3) | (1u << 7),                              // Minor:  0 3 7
+    (1u << 0) | (1u << 3) | (1u << 7) | (1u << 10),                 // Min7:   0 3 7 10
+    (1u << 0) | (1u << 4) | (1u << 7),                              // Major:  0 4 7
+    (1u << 0) | (1u << 4) | (1u << 7) | (1u << 11),                 // Maj7:   0 4 7 11
+    (1u << 0) | (1u << 2) | (1u << 4) | (1u << 7),                  // Add9:   0 2 4 7
+    (1u << 0) | (1u << 4) | (1u << 6) | (1u << 7) | (1u << 11),     // Lydian: 0 4 6 7 11 (maj7#11)
+};
+
+// Degrees played by voice 2 and voice 3 for each chord (semitones above the
+// root, 0..11). Each voice takes its degree in the octave closest to its own
+// planet pitch, so it keeps its register and the chord colour is always heard.
+// Voice 1 is the root and never moves. Celestia voices fill in the rest.
+constexpr int kKosmosDegree[kKosmosChords][2] = {
+    {7, 0},    // Power:  fifth, octave
+    {5, 7},    // Sus4:   fourth, fifth
+    {2, 7},    // Sus2:   second, fifth
+    {3, 7},    // Minor:  minor third, fifth
+    {3, 10},   // Min7:   minor third, minor seventh
+    {4, 7},    // Major:  major third, fifth
+    {4, 11},   // Maj7:   major third, major seventh
+    {4, 2},    // Add9:   major third, ninth
+    {4, 6},    // Lydian: major third, sharp eleventh
+};
+
+// Ratio that moves noteHz onto the chord degree of `voice` (0 = voice 2,
+// 1 = voice 3), in the octave closest to the original pitch.
+inline float KosmosDegreeRatio(float rootHz, float noteHz, int zone, int voice)
 {
-    if(voiceIndex != 1 && voiceIndex != 2)
+    if(zone <= 0 || rootHz <= 1.0f || noteHz <= 1.0f)
+        return 1.0f;   // zone 0: Kosmos off
+    if(zone >= kKosmosZones)
+        zone = kKosmosZones - 1;
+    const int degree = kKosmosDegree[zone - 1][voice];
+    const float s = 12.0f * NuutLog2(noteHz / rootHz);
+    // Nearest value of the form degree + 12 * k.
+    const float k = floorf((s - static_cast<float>(degree)) / 12.0f + 0.5f);
+    const float m = static_cast<float>(degree) + 12.0f * k;
+    return NuutExp2((m - s) / 12.0f);
+}
+
+// Frequency ratio that moves noteHz onto the nearest note of the chord
+// built on rootHz. avoidPc (0..11, or -1) is a pitch class that must not
+// be used, so two voices do not land on the same note. outPc receives the
+// pitch class that was chosen.
+inline float KosmosSnapRatio(
+    float rootHz, float noteHz, int zone, int avoidPc, int* outPc)
+{
+    if(outPc)
+        *outPc = -1;
+    if(rootHz <= 1.0f || noteHz <= 1.0f)
         return 1.0f;
 
-    static const float ratioVoice1Table[5] = {
-        1.25f,       // Major
-        1.125f,      // Sus2
-        1.333333f,   // Sus4
-        1.2f,        // Minor
-        1.5f         // Power chord
-    };
+    if(zone <= 0)
+        return 1.0f;   // zone 0: Kosmos off
+    if(zone >= kKosmosZones)
+        zone = kKosmosZones - 1;
 
-    static const float ratioVoice2Table[5] = {
-        1.5f,
-        1.5f,
-        1.5f,
-        1.5f,
-        2.0f
-    };
+    const unsigned mask = kKosmosChord[zone - 1];
+    const float s = 12.0f * NuutLog2(noteHz / rootHz);   // semitones above the root
+    const int   r = static_cast<int>(floorf(s + 0.5f));
 
-    const float kosmosAmount = fmaxf(0.0f, fminf(1.0f, kosmos));
-    const float kosmosPosition = kosmosAmount * 4.0f;
-    const int harmonyMode = (int)kosmosPosition;
-    const float harmonyBlend = kosmosPosition - harmonyMode;
+    int   best     = 0;
+    float bestDist = 1.0e9f;
+    bool  found    = false;
+    for(int d = -7; d <= 7; d++)
+    {
+        const int m  = r + d;
+        const int pc = ((m % 12) + 12) % 12;
+        if(!((mask >> pc) & 1u) || pc == avoidPc)
+            continue;
+        const float dist = fabsf(static_cast<float>(m) - s);
+        if(dist < bestDist)
+        {
+            bestDist = dist;
+            best     = m;
+            found    = true;
+        }
+    }
+    if(!found)
+        return 1.0f;
 
-    const int nextMode = (harmonyMode < 4)
-        ? harmonyMode + 1
-        : harmonyMode;
-
-    const float* table = (voiceIndex == 1)
-        ? ratioVoice1Table
-        : ratioVoice2Table;
-
-    return table[harmonyMode]
-        + (table[nextMode] - table[harmonyMode]) * harmonyBlend;
+    if(outPc)
+        *outPc = ((best % 12) + 12) % 12;
+    return NuutExp2((static_cast<float>(best) - s) / 12.0f);
 }
 
 // ============================================================
@@ -226,21 +323,17 @@ inline float ProcessVoice(
     float kosmos, int voiceIndex,
     float rootFrequency,
     CombLP6BreathState* state,
-    float waveMorph = 0.0f)
+    float waveMorph = 0.0f,
+    float brightness = 0.0f)   // 0 = fader up, 1 = fader all the way down
 {
     // Silent voice: nothing audible, skip all DSP.
     if(!gate && voice->envelope <= 0.0f)
         return 0.0f;
 
-    // KOSMOS — recomputed only when the knob (or voice index) changes
-    if(voice->cachedVoiceIndex != voiceIndex
-       || voice->cachedKosmos != kosmos)
-    {
-        voice->cachedHarmonicRatio = ComputeHarmonicRatio(kosmos, voiceIndex);
-        voice->cachedKosmos = kosmos;
-        voice->cachedVoiceIndex = voiceIndex;
-    }
-    const float harmonicRatio = voice->cachedHarmonicRatio;
+    // KOSMOS: the parameter `kosmos` is now the frequency ratio that puts this
+    // voice on its chord note (computed once per block in the main file).
+    (void)voiceIndex;
+    const float harmonicRatio = kosmos;
 
     const float targetFrequency =
         voice->frequency * originRatio * harmonicRatio;
@@ -287,7 +380,30 @@ inline float ProcessVoice(
         voice->wavePhase -= 1.0f;
     const float ph = voice->wavePhase;
 
-    float wave = FastSin01(ph);
+    // FM (brightness): a sine modulator at exactly four times the frequency
+    // (4:1, so it stays harmonic and in tune) bends the phase of the sine. It
+    // comes in only when the Alchemy fader goes DOWN (index = brightness
+    // squared, up to kAlchemyFmMax) and is smoothed per sample, so there are no
+    // clicks. At 130-450 Hz the strong sidebands stay below about 8 kHz, so
+    // aliasing is not an issue.
+    constexpr float kAlchemyFmMax   = 0.45f;
+    constexpr float kAlchemyFmRatio = 4.0f;
+    voice->fmSmoothed
+        += 0.002f * (kAlchemyFmMax * brightness * brightness - voice->fmSmoothed);
+
+    float wavePh = ph;
+    if(voice->fmSmoothed > 0.002f)
+    {
+        float ph2 = ph * kAlchemyFmRatio;
+        ph2 -= floorf(ph2);
+        wavePh = ph + voice->fmSmoothed * (1.0f / 6.2831853f) * FastSin01(ph2);
+        if(wavePh >= 1.0f)
+            wavePh -= 1.0f;
+        else if(wavePh < 0.0f)
+            wavePh += 1.0f;
+    }
+
+    float wave = FastSin01(wavePh);
     if(m > 0.001f)
     {
         // Triangle, phase-aligned with the sine (little aliasing, so it
