@@ -19,7 +19,7 @@ using namespace daisysp;
 // Cheap sine for a phase in [0, 1). Parabolic approximation with one
 // refinement step (error around 0.1%, inaudible on a pad voice).
 // Much cheaper than sinf().
-inline float FastSin01(float phase)
+__attribute__((optimize("O2"))) inline float FastSin01(float phase)
 {
     const float x = 2.0f * phase - 1.0f;
     float y = 4.0f * x * (1.0f - fabsf(x));
@@ -312,7 +312,7 @@ inline float KosmosSnapRatio(
 // and state are unused.
 // ============================================================
 
-inline float ProcessVoice(
+__attribute__((optimize("O2"))) inline float ProcessVoice(
     Voice* voice,
     bool gate,
     float filterMod,
@@ -389,7 +389,7 @@ inline float ProcessVoice(
     constexpr float kAlchemyFmMax   = 0.45f;
     constexpr float kAlchemyFmRatio = 4.0f;
     voice->fmSmoothed
-        += 0.002f * (kAlchemyFmMax * brightness * brightness - voice->fmSmoothed);
+        += 0.0008f * (kAlchemyFmMax * brightness * brightness - voice->fmSmoothed);
 
     float wavePh = ph;
     if(voice->fmSmoothed > 0.002f)
@@ -479,7 +479,7 @@ inline float ProcessVoice(
 // EXTRA CONSTELLATION VOICE PROCESSING
 // ============================================================
 
-inline float ProcessPlanetConstellationVoice(
+__attribute__((optimize("O2"))) inline float ProcessPlanetConstellationVoice(
     PlanetConstellationVoice* voice,
     float targetFrequency)
 {

@@ -2,6 +2,13 @@
 
 #include "aspects/aspects_data.h"
 
+// 1 = the flute plays melodies (phrases of notes of different lengths).
+// 0 = the flute plays the old single note / trill. Set it to 0 if the
+// build runs out of flash: it saves the phrase builder.
+#ifndef NUUT_FLUTE_PHRASE
+#define NUUT_FLUTE_PHRASE 1
+#endif
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -66,6 +73,17 @@ struct NUUTEventBell
     std::size_t clock = 0;
 
     std::uint32_t rng = 13579u;
+
+    // Voicing of the chord: the melody starts on the root (0), the second
+    // (1) or the third (2) note of the chord about half of the time.
+    int inversion = 0;
+
+    // Phrase mode (notes played one by one by the voice): each note takes
+    // the next free bell, rings for decayScale times its normal time.
+    bool direct = false;
+    float decayScale = 1.0f;
+    float singleVel = 1.0f;
+    std::size_t rr = 0;
 
     float sampleRate = 48000.0f;
 };
@@ -144,11 +162,18 @@ inline float ProcessNUUTEventBell(
 
         std::size_t count = 1;
 
+        std::size_t firstOpen = 0;
+
         if(chord == nullptr)
         {
-            bell->noteFreq[0] = fmaxf(180.0f, fminf(700.0f, frequency));
-            bell->noteVel[0] = 1.0f;
-            bell->noteTime[0] = 0;
+            const std::size_t b0 =
+                bell->direct ? (bell->rr++ % NUUTEventBell::BANK_COUNT) : 0;
+            bell->noteFreq[b0] = bell->direct
+                ? frequency : fmaxf(180.0f, fminf(700.0f, frequency));
+            bell->noteVel[b0] = bell->direct ? bell->singleVel : 1.0f;
+            bell->noteTime[b0] = 0;
+            count = b0 + 1;
+            firstOpen = b0;
         }
         else
         {
@@ -205,7 +230,9 @@ inline float ProcessNUUTEventBell(
                     if(stepIsChord[k])
                         candidates[firstOct++] = k;
 
-                idx = candidates[static_cast<int>(rand01() * firstOct) % firstOct];
+                const int pick = static_cast<int>(rand01() * firstOct) % firstOct;
+                const bool voiced = rand01() < 0.5f;
+                idx = candidates[(voiced ? bell->inversion : pick) % firstOct];
             }
 
             count = 5 + static_cast<std::size_t>(rand01() * 3.0f) % 3; // 5-7
@@ -247,7 +274,11 @@ inline float ProcessNUUTEventBell(
                 bell->noteTime[k] = static_cast<std::size_t>(t * sr);
 
                 // Flowing, slightly uneven pace; the last note is let ring.
-                t += 0.17f + 0.13f * rand01();
+                {
+                    const float g = rand01();
+                    t += g < 0.45f ? 0.16f : (g < 0.75f ? 0.32f
+                         : (g < 0.92f ? 0.50f : 0.80f));
+                }
 
                 // Walk: mostly by one step, sometimes two; turn around
                 // now and then and at the edges.
@@ -273,7 +304,7 @@ inline float ProcessNUUTEventBell(
         }
 
         for(std::size_t k = 0; k < count; ++k)
-            bell->noteDone[k] = false;
+            bell->noteDone[k] = k < firstOpen;
 
         bell->noteCount = count;
         bell->clock = 0;
@@ -302,7 +333,7 @@ inline float ProcessNUUTEventBell(
                     // Partials that would be too high are left out.
                     bell->modeOn[k][i] = f < sr * 0.40f;
 
-                    const float radius = expf(-1.0f / (DECAY[i] * sr));
+                    const float radius = expf(-1.0f / (DECAY[i] * sr * bell->decayScale));
                     const float omega = TWO_PI * fminf(f, sr * 0.40f) / sr;
 
                     bell->coeffA[k][i] = 2.0f * radius * cosf(omega);
@@ -343,7 +374,7 @@ inline float ProcessNUUTEventBell(
 
             // A mode that has rung out is switched off (it would otherwise be
             // computed forever, at no audible effect, and cost a lot of CPU).
-            if(fabsf(y) < 1e-7f && fabsf(bell->y2[n][i]) < 1e-7f)
+            if(fabsf(y) < 1e-5f && fabsf(bell->y2[n][i]) < 1e-5f)
             {
                 bell->modeOn[n][i] = false;
                 bell->y1[n][i] = 0.0f;
@@ -393,11 +424,21 @@ struct NUUTEventGong
     float rotC[MODE_COUNT] = {};
     float rotS[MODE_COUNT] = {};
 
-    // Deep sine body under the strike.
+    // Deep sine body under the strike (a rotating phasor, no sinf per sample).
     float bodyPhase = 0.0f;
     float bodyFreq = 80.0f;
     float bodyEnv = 0.0f;
     float bodyDecay = 0.9999f;
+    float bodyC = 1.0f;
+    float bodyS = 0.0f;
+    float bodyRotC = 1.0f;
+    float bodyRotS = 0.0f;
+
+    // CPU: the swell (smoothers and tones) only runs for the first 2.5 s,
+    // and a partial that has rung out is switched off.
+    float swellScale[MODE_COUNT] = {};
+    bool modeOn[MODE_COUNT] = {};
+    int bloomLeft = 0;
 
     // Crash of noise at the strike.
     float crashEnv = 0.0f;
@@ -405,6 +446,16 @@ struct NUUTEventGong
     float crashLp = 0.0f;
 
     std::uint32_t rng = 31415u;
+
+    // Strength of the next strike (a repeated hit is softer, so the boom
+    // does not pile up on the ringing tail).
+    float strikeGain = 1.0f;
+
+    // A gong gesture is a few firm strokes (like the drum, but slower):
+    // the first one at the trigger, the others from this little sequencer.
+    int seqLeft = 0;
+    int seqIndex = 0;
+    int seqTimer = 0;
 
     float sampleRate = 48000.0f;
 };
@@ -414,6 +465,8 @@ inline void StopNUUTEventGong(NUUTEventGong* gong)
 {
     gong->bodyEnv = 0.0f;
     gong->crashEnv = 0.0f;
+    gong->bloomLeft = 0;
+    gong->seqLeft = 0;
 
     for(std::size_t i = 0;
         i < NUUTEventGong::MODE_COUNT;
@@ -423,6 +476,7 @@ inline void StopNUUTEventGong(NUUTEventGong* gong)
         gong->y2[i] = 0.0f;
         gong->smooth1[i] = 0.0f;
         gong->smooth2[i] = 0.0f;
+        gong->modeOn[i] = false;
     }
 }
 
@@ -462,31 +516,58 @@ inline float ProcessNUUTEventGong(
 
     // Seconds for each partial to swell in (small = at the strike).
     static constexpr float BLOOM[8] =
-        {0.004f, 0.006f, 0.02f, 0.06f, 0.12f, 0.20f, 0.30f, 0.40f};
+        {0.004f, 0.006f, 0.012f, 0.03f, 0.06f, 0.10f, 0.16f, 0.24f};
 
     static constexpr float EXCITATION[8] =
         {0.26f, 0.24f, 0.26f, 0.26f, 0.26f, 0.24f, 0.22f, 0.20f};
 
     // Share of each partial that is struck at once (the rest blooms in).
     static constexpr float IMPACT[8] =
-        {1.00f, 1.00f, 0.60f, 0.50f, 0.40f, 0.30f, 0.25f, 0.20f};
+        {1.00f, 1.00f, 1.00f, 0.90f, 0.80f, 0.70f, 0.60f, 0.50f};
 
     constexpr float BLOOM_DRIVE = 8.0e-6f;
 
+    // Darker than the first version, but the middle partials stay: they are
+    // what makes the gong heard on small speakers and headphones.
     static constexpr float WEIGHT[8] =
-        {0.90f, 0.80f, 0.80f, 0.80f, 0.75f, 0.65f, 0.55f, 0.45f};
+        {0.70f, 0.62f, 0.85f, 0.90f, 0.85f, 0.72f, 0.55f, 0.40f};
 
     // Overall level: a strike that really is heard.
-    constexpr float GONG_LEVEL = 4.5f;
+    constexpr float GONG_LEVEL = 13.0f;
     constexpr float TWO_PI = 6.28318530718f;
     const float sr = gong->sampleRate;
 
     float strike = 0.0f;
+    bool hit = false;
+    float hitGain = gong->strikeGain;
+
+    // Strokes 2 and 3 of the gesture.
+    static constexpr float SEQ_GAP[2]  = {2.0f, 2.2f};   // seconds: slow, each stroke rings
+    static constexpr float SEQ_GAIN[2] = {0.85f, 0.95f};
+    if(!trigger && gong->seqLeft > 0 && --gong->seqTimer <= 0)
+    {
+        hit = true;
+        hitGain = gong->strikeGain * SEQ_GAIN[gong->seqIndex];
+        ++gong->seqIndex;
+        --gong->seqLeft;
+        if(gong->seqLeft > 0)
+            gong->seqTimer = static_cast<int>(SEQ_GAP[1] * sr);
+        // Each stroke starts its own swell.
+        for(std::size_t i = 0; i < NUUTEventGong::MODE_COUNT; ++i)
+        {
+            gong->smooth1[i] = 0.0f;
+            gong->smooth2[i] = 0.0f;
+            gong->phC[i] = 1.0f;
+            gong->phS[i] = 0.0f;
+            gong->modeOn[i] = true;
+        }
+    }
 
     if(trigger)
     {
-        // Cavernous: take the note down into 80 - 160 Hz.
-        const float f0 = NUUTEventFoldFrequency(frequency, 80.0f, 160.0f);
+        // The note is taken into 200 - 400 Hz: low and deep, but still heard on
+        // small speakers and headphones.
+        const float f0 = NUUTEventFoldFrequency(frequency, 260.0f, 520.0f);
 
         for(std::size_t i = 0;
             i < NUUTEventGong::MODE_COUNT;
@@ -506,42 +587,80 @@ inline float ProcessNUUTEventGong(
             gong->rotS[i] = sinf(omega);
 
             gong->smoothK[i] = 1.0f - expf(-1.0f / (BLOOM[i] * sr));
+            gong->swellScale[i] = 1.0f / (0.368f * gong->smoothK[i]);
+            gong->modeOn[i] = true;
         }
 
+        // 3 strokes (2 now and then).
+        gong->rng = gong->rng * 1664525u + 1013904223u;
+        gong->seqLeft = (gong->rng >> 24) < 64 ? 1 : 2;
+        gong->seqIndex = 0;
+        gong->seqTimer = static_cast<int>(SEQ_GAP[0] * sr);
+        hit = true;
+        hitGain = gong->strikeGain;
         gong->bodyFreq = f0;
-        gong->bodyEnv = 1.0f;
-        gong->bodyDecay = expf(-1.0f / (1.6f * sr));
+        gong->bodyRotC = cosf(TWO_PI * f0 / sr);
+        gong->bodyRotS = sinf(TWO_PI * f0 / sr);
+    }
 
-        strike = 1.0f;
+    if(hit)
+    {
+        const float f0 = gong->bodyFreq;
+        gong->bloomLeft = static_cast<int>(2.5f * sr);
+        gong->bodyEnv = hitGain;
+        gong->bodyDecay = expf(-1.0f / (1.6f * sr));
+        gong->bodyC = 1.0f;
+        gong->bodyS = 0.0f;
+        (void)f0;
+
+        strike = hitGain;
+        gong->crashEnv = hitGain;
+        gong->crashDecay = expf(-1.0f / (0.07f * sr));
     }
 
     float output = 0.0f;
+    const bool blooming = gong->bloomLeft > 0;
 
     for(std::size_t i = 0;
         i < NUUTEventGong::MODE_COUNT;
         ++i)
     {
-        // The strike goes through the smoothers: fast for the low
-        // partials, slow (a swell) for the high ones.
-        // Swell envelope of this partial (peak of about 1 after BLOOM).
-        gong->smooth1[i] += gong->smoothK[i] * (strike - gong->smooth1[i]);
-        gong->smooth2[i] += gong->smoothK[i] * (gong->smooth1[i] - gong->smooth2[i]);
-        const float swell =
-            gong->smooth2[i] / (0.368f * gong->smoothK[i]);
+        if(!gong->modeOn[i])
+            continue;
 
-        // The pure tone of this partial (a rotating phasor, cheap).
-        const float tone = gong->phS[i];
-        const float nextC = gong->phC[i] * gong->rotC[i] - tone * gong->rotS[i];
-        const float nextS = tone * gong->rotC[i] + gong->phC[i] * gong->rotS[i];
-        gong->phC[i] = nextC;
-        gong->phS[i] = nextS;
+        float y = gong->coeffA[i] * gong->y1[i]
+                  + gong->coeffB[i] * gong->y2[i];
 
-        // A hit right at the strike, plus the tone that swells in.
-        const float y =
-            strike * EXCITATION[i] * IMPACT[i] * gong->coeffIn[i]
-            + tone * swell * BLOOM_DRIVE
-            + gong->coeffA[i] * gong->y1[i]
-            + gong->coeffB[i] * gong->y2[i];
+        if(blooming)
+        {
+            // The strike goes through the smoothers: fast for the low
+            // partials, slow (a swell) for the high ones.
+            gong->smooth1[i] += gong->smoothK[i] * (strike - gong->smooth1[i]);
+            gong->smooth2[i] += gong->smoothK[i] * (gong->smooth1[i] - gong->smooth2[i]);
+            const float swell = gong->smooth2[i] * gong->swellScale[i];
+
+            // The pure tone of this partial (a rotating phasor, cheap).
+            const float tone = gong->phS[i];
+            const float nextC = gong->phC[i] * gong->rotC[i] - tone * gong->rotS[i];
+            const float nextS = tone * gong->rotC[i] + gong->phC[i] * gong->rotS[i];
+            gong->phC[i] = nextC;
+            gong->phS[i] = nextS;
+
+            y += tone * swell * BLOOM_DRIVE;
+        }
+
+        // A hit right at the strike.
+        if(strike != 0.0f)
+            y += strike * EXCITATION[i] * IMPACT[i] * gong->coeffIn[i];
+
+        // A partial that has rung out (far below hearing) is switched off.
+        if(!blooming && fabsf(y) < 3.0e-6f && fabsf(gong->y1[i]) < 3.0e-6f)
+        {
+            gong->modeOn[i] = false;
+            gong->y1[i] = 0.0f;
+            gong->y2[i] = 0.0f;
+            continue;
+        }
 
         gong->y2[i] = gong->y1[i];
         gong->y1[i] = y;
@@ -549,15 +668,34 @@ inline float ProcessNUUTEventGong(
         output += y * WEIGHT[i];
     }
 
+    if(blooming)
+        --gong->bloomLeft;
+
     // Deep body.
-    gong->bodyPhase += gong->bodyFreq / sr;
-    if(gong->bodyPhase >= 1.0f)
-        gong->bodyPhase -= 1.0f;
+    float body = 0.0f;
+    if(gong->bodyEnv > 1.0e-4f)
+    {
+        body = gong->bodyS * gong->bodyEnv;
+        const float nS = gong->bodyS * gong->bodyRotC + gong->bodyC * gong->bodyRotS;
+        const float nC = gong->bodyC * gong->bodyRotC - gong->bodyS * gong->bodyRotS;
+        gong->bodyS = nS;
+        gong->bodyC = nC;
+        gong->bodyEnv *= gong->bodyDecay;
+    }
 
-    const float body = sinf(TWO_PI * gong->bodyPhase) * gong->bodyEnv;
-    gong->bodyEnv *= gong->bodyDecay;
+    // (no noise in the gong: the strike is purely tonal)
+    float crack = 0.0f;
+    if(gong->crashEnv > 1.0e-3f)
+    {
+        gong->rng = gong->rng * 1664525u + 1013904223u;
+        const float noise =
+            static_cast<float>(static_cast<std::int32_t>(gong->rng)) * (1.0f / 2147483648.0f);
+        gong->crashLp += 0.35f * (noise - gong->crashLp);
+        crack = (noise - gong->crashLp) * gong->crashEnv;
+        gong->crashEnv *= gong->crashDecay;
+    }
 
-    return (output * 1.5f + body * 0.9f) * GONG_LEVEL;
+    return (output * 1.5f + body * 0.8f + crack * 0.0f) * GONG_LEVEL;
 }
 
 
@@ -893,6 +1031,13 @@ struct NUUTEventFlute
     float blowAttack = 0.30f;
     float chiffAmt = 1.2f;
 
+    // Phrase mode: the voice plays the notes of a melody one by one. Each
+    // note has its own length, is not folded, and may end with a trill.
+    bool direct = false;
+    bool directTrill = false;
+    float blowSeconds = 1.8f;
+    float blowRelease = 0.9f;
+
     std::uint32_t rng = 54321u;
 
     float sampleRate = 48000.0f;
@@ -994,7 +1139,6 @@ inline float ProcessNUUTEventFlute(
     constexpr float TWO_PI = 6.28318530718f;
 
     // Blow shape (seconds) and levels.
-    constexpr float BLOW_SECONDS = 1.80f;
     constexpr float BLOW_ATTACK = 0.50f;
     constexpr float BLOW_RELEASE = 0.90f;
     constexpr float CHIFF_SECONDS = 0.06f;
@@ -1028,7 +1172,8 @@ inline float ProcessNUUTEventFlute(
 
         // An octave up: the pad plays the same notes lower down.
         // Folded by octaves, so each note keeps its own pitch class.
-        frequency = NUUTEventFoldFrequency(frequency * 2.0f, 440.0f, 1100.0f);
+        if(!flute->direct)
+            frequency = NUUTEventFoldFrequency(frequency * 2.0f, 330.0f, 825.0f);
 
         // Origin knob: the notes move down or up (up to an octave), after
         // the folding, so the octave shift is kept.
@@ -1036,7 +1181,7 @@ inline float ProcessNUUTEventFlute(
 
         // Each blow is either a single note with a soft entry (half of
         // the time) or a little trill between two close notes.
-        flute->trill = rand01() < 0.5f;
+        flute->trill = flute->direct ? flute->directTrill : (rand01() < 0.5f);
 
         float partner = frequency;
 
@@ -1053,6 +1198,18 @@ inline float ProcessNUUTEventFlute(
         {
             flute->blowAttack = 0.90f; // slower, softer entry
             flute->chiffAmt = 0.25f;   // less "tongue" at the start
+        }
+
+        // A note of a melody: a short note enters faster than a long one.
+        if(flute->direct)
+        {
+            flute->blowAttack = fminf(0.5f, 0.35f * flute->blowSeconds);
+            flute->blowRelease = fminf(0.9f, 0.5f * flute->blowSeconds);
+            flute->chiffAmt = 0.45f;
+        }
+        else
+        {
+            flute->blowRelease = BLOW_RELEASE;
         }
 
         for(std::size_t i = 0;
@@ -1079,7 +1236,7 @@ inline float ProcessNUUTEventFlute(
         }
 
         flute->blowTotal =
-            static_cast<std::size_t>(BLOW_SECONDS * sr);
+            static_cast<std::size_t>(flute->blowSeconds * sr);
         flute->blowLeft = flute->blowTotal;
         flute->tremPhase = 0.0f;
         flute->trillPhase = 0.0f;
@@ -1103,7 +1260,7 @@ inline float ProcessNUUTEventFlute(
             static_cast<float>(flute->blowLeft) / sr;
 
         blow = fminf(1.0f, t / flute->blowAttack);
-        blow = fminf(blow, tLeft / BLOW_RELEASE);
+        blow = fminf(blow, tLeft / flute->blowRelease);
 
         chiff = expf(-t / CHIFF_SECONDS);
 
@@ -1213,8 +1370,19 @@ struct NUUTEventString
     float strumVel[NOTE_COUNT] = {};
     std::size_t strumDelay[NOTE_COUNT] = {};
     bool strumPending[NOTE_COUNT] = {};
+    // A string is only computed while it still rings.
+    bool noteActive[NOTE_COUNT] = {};
 
     std::uint32_t rng = 97531u;
+
+    // Voicing of the chord (0 = root position, 1 and 2 = inversions): the
+    // strum and the spread start higher up the chord.
+    int inversion = 0;
+
+    // Phrase mode (notes played one by one by the voice).
+    bool direct = false;
+    float decayScale = 1.0f;
+    float pluckVel = 1.0f;
 
     float sampleRate = 48000.0f;
 };
@@ -1224,6 +1392,7 @@ inline void StopNUUTEventString(NUUTEventString* s)
     for(std::size_t n = 0; n < NUUTEventString::NOTE_COUNT; ++n)
     {
         s->strumPending[n] = false;
+        s->noteActive[n] = false;
 
         for(std::size_t i = 0; i < NUUTEventString::MODE_COUNT; ++i)
         {
@@ -1286,16 +1455,17 @@ inline float ProcessNUUTEventString(
         0.12f, 0.10f, 0.08f, 0.07f, 0.06f
     };
 
+    // Softer highs than before: a warmer string.
     static constexpr float WEIGHT[10] =
     {
-        0.85f, 0.70f, 0.58f, 0.55f, 0.52f,
-        0.46f, 0.40f, 0.34f, 0.28f, 0.22f
+        0.85f, 0.70f, 0.52f, 0.40f, 0.30f,
+        0.22f, 0.15f, 0.10f, 0.07f, 0.05f
     };
 
     // Partials from this one up go through the soft "buzz".
     constexpr std::size_t BUZZ_FROM = 3;
-    constexpr float BUZZ_DRIVE = 2.5f;
-    constexpr float STRING_LEVEL = 1.4f;
+    constexpr float BUZZ_DRIVE = 1.8f;
+    constexpr float STRING_LEVEL = 1.25f;
     constexpr float PI = 3.14159265359f;
     constexpr float TWO_PI = 6.28318530718f;
 
@@ -1311,7 +1481,8 @@ inline float ProcessNUUTEventString(
     };
 
     // What each string is plucked with in this sample (zero = nothing).
-    float excite[NUUTEventString::NOTE_COUNT][NUUTEventString::MODE_COUNT] = {};
+    float excite[NUUTEventString::NOTE_COUNT][NUUTEventString::MODE_COUNT];
+    bool plucked[NUUTEventString::NOTE_COUNT] = {};
 
     // Tunes string n to f0 and fills its pluck.
     auto pluck = [&](std::size_t n, float f0, float vel) {
@@ -1319,11 +1490,13 @@ inline float ProcessNUUTEventString(
         const float pos = 0.12f + 0.14f * rand01();
 
         auto& r = s->notes[n];
+        s->noteActive[n] = true;
+        plucked[n] = true;
 
         for(std::size_t i = 0; i < NUUTEventString::MODE_COUNT; ++i)
         {
             const float f = fminf(f0 * RATIOS[i], sr * 0.40f);
-            const float radius = expf(-1.0f / (DECAY[i] * sr));
+            const float radius = expf(-1.0f / (DECAY[i] * sr * s->decayScale));
             const float omega = TWO_PI * f / sr;
 
             r.coeffA[i] = 2.0f * radius * cosf(omega);
@@ -1377,7 +1550,7 @@ inline float ProcessNUUTEventString(
                     for(std::size_t k = 0; k < 3; ++k)
                     {
                         const std::size_t n = down ? k : 2 - k;
-                        float f = ladder[n];            // the three lowest
+                        float f = ladder[n + s->inversion]; // the three lowest
                         if(rand01() < 0.30f)
                             f *= 2.0f;                  // some an octave up
 
@@ -1396,7 +1569,7 @@ inline float ProcessNUUTEventString(
 
                     for(std::size_t k = 0; k < 4; ++k)
                     {
-                        s->strumFreq[k] = ladder[up ? k : 3 - k];
+                        s->strumFreq[k] = ladder[(up ? k : 3 - k) + s->inversion];
                         s->strumVel[k] = 0.80f + 0.20f * rand01();
                         s->strumDelay[k] = static_cast<std::size_t>(t * sr);
                         t += 0.16f + 0.16f * rand01();
@@ -1406,7 +1579,7 @@ inline float ProcessNUUTEventString(
                 {
                     // Short phrase: 5 - 6 plucks walking along the ladder.
                     count = 5 + static_cast<std::size_t>(rand01() * 2.0f) % 2;
-                    int idx = static_cast<int>(rand01() * 3.0f) % 3;
+                    int idx = static_cast<int>(rand01() * 3.0f) % 3 + s->inversion;
                     int dir = 1;
 
                     for(std::size_t k = 0; k < count; ++k)
@@ -1418,7 +1591,11 @@ inline float ProcessNUUTEventString(
                             / static_cast<float>(count));
                         s->strumVel[k] = 0.55f + 0.40f * arc + 0.05f * rand01();
                         s->strumDelay[k] = static_cast<std::size_t>(t * sr);
-                        t += 0.15f + 0.17f * rand01();
+                        {
+                            const float g = rand01();
+                            t += g < 0.45f ? 0.15f : (g < 0.75f ? 0.30f
+                                 : (g < 0.92f ? 0.48f : 0.75f));
+                        }
 
                         if(rand01() < 0.25f)
                             dir = -dir;
@@ -1438,12 +1615,13 @@ inline float ProcessNUUTEventString(
             }
         }
         else if(noteIndex >= 0
-                && noteIndex < static_cast<int>(3))
+                && noteIndex < static_cast<int>(NUUTEventString::NOTE_COUNT))
         {
             // Without a chord: one string per trigger, as before.
             pluck(static_cast<std::size_t>(noteIndex),
-                  fmaxf(180.0f, fminf(700.0f, frequency)),
-                  1.0f);
+                  s->direct ? frequency
+                            : fmaxf(180.0f, fminf(700.0f, frequency)),
+                  s->direct ? s->pluckVel : 1.0f);
         }
     }
 
@@ -1468,20 +1646,26 @@ inline float ProcessNUUTEventString(
 
     for(std::size_t n = 0; n < NUUTEventString::NOTE_COUNT; ++n)
     {
+        // A string that has rung out costs nothing.
+        if(!s->noteActive[n])
+            continue;
+
         auto& r = s->notes[n];
 
         float low = 0.0f;
         float high = 0.0f;
+        float peak = 0.0f;
 
         for(std::size_t i = 0; i < NUUTEventString::MODE_COUNT; ++i)
         {
             const float y =
-                excite[n][i]
+                (plucked[n] ? excite[n][i] : 0.0f)
                 + r.coeffA[i] * r.y1[i]
                 + r.coeffB[i] * r.y2[i];
 
             r.y2[i] = r.y1[i];
             r.y1[i] = y;
+            peak = fmaxf(peak, fabsf(y));
 
             if(i < BUZZ_FROM)
                 low += y * WEIGHT[i];
@@ -1497,6 +1681,17 @@ inline float ProcessNUUTEventString(
             : h * (27.0f + h2) / (27.0f + 9.0f * h2);
 
         output += low + buzz / BUZZ_DRIVE;
+
+        // Rung out (well below hearing): switch the string off.
+        if(peak < 1e-5f)
+        {
+            s->noteActive[n] = false;
+            for(std::size_t i = 0; i < NUUTEventString::MODE_COUNT; ++i)
+            {
+                r.y1[i] = 0.0f;
+                r.y2[i] = 0.0f;
+            }
+        }
     }
 
     return output * STRING_LEVEL;
@@ -1528,6 +1723,29 @@ struct NUUTEventVoice
     NUUTEventString string;
 
     NUUTEventTimbre timbre = NUUTEventTimbre::CrystalBell;
+
+    // Voicing of the chord, 0..2 (see the bell and the string).
+    int inversion = 0;
+
+    // 1 for the first hit of an event, lower for the repeats (gong).
+    float repeatGain = 1.0f;
+
+    // Melody (flute): a phrase of notes of different lengths on the chord.
+    static constexpr int PHRASE_MAX = 8;
+    int phCount = 0;
+    int phIdx = 0;
+    std::size_t phClock = 0;
+    std::size_t phTime[PHRASE_MAX] = {};
+    float phFreq[PHRASE_MAX] = {};
+    float phDur[PHRASE_MAX] = {};
+    bool phTrill[PHRASE_MAX] = {};
+    std::uint32_t phRng = 24680u;
+    int phRr = 0;           // next string for a phrase note
+    bool phrasesOn = true;  // false (melody at zero): the old single gesture
+
+    // The instrument that played before the last change keeps ringing.
+    NUUTEventTimbre prevTimbre = NUUTEventTimbre::CrystalBell;
+    int prevLeft = 0;
 
     // The three notes of the current chord (see SetNUUTEventChord).
     float chord[3] = {432.0f, 432.0f, 432.0f};
@@ -1616,18 +1834,177 @@ inline void SetNUUTEventTimbre(
 {
     if(timbre != voice->timbre)
     {
-        StopNUUTEventBell(&voice->bell);
-        StopNUUTEventGong(&voice->gong);
-        StopNUUTEventTribalDrum(&voice->tribalDrum);
-        StopNUUTEventFlute(&voice->flute);
-        StopNUUTEventString(&voice->string);
+        voice->phCount = 0;
+        voice->bell.direct = false;
+        voice->string.direct = false;
+
+        // The instrument that was playing is not cut: it rings out (a gong
+        // for 6 s, the others for 1.5 s) while the new one starts.
+        const NUUTEventTimbre old = voice->timbre;
+        if(old != NUUTEventTimbre::CrystalBell) StopNUUTEventBell(&voice->bell);
+        if(old != NUUTEventTimbre::Gong) StopNUUTEventGong(&voice->gong);
+        if(old != NUUTEventTimbre::TribalDrum) StopNUUTEventTribalDrum(&voice->tribalDrum);
+        if(old != NUUTEventTimbre::Flute) StopNUUTEventFlute(&voice->flute);
+        if(old != NUUTEventTimbre::String) StopNUUTEventString(&voice->string);
+        voice->prevTimbre = old;
+        voice->prevLeft = static_cast<int>(
+            (old == NUUTEventTimbre::Gong ? 6.0f : 1.5f) * voice->sampleRate);
     }
 
     voice->timbre = timbre;
 }
 
 
-inline float ProcessNUUTEventVoiceRaw(
+#if NUUT_FLUTE_PHRASE
+// Builds a melody on the current chord: 3 to 6 notes that walk along the
+// chord and its scale, with long and short notes, ending on a chord note
+// (the last one is the longest, sometimes with a trill). Every call makes a
+// different phrase.
+inline void BuildNUUTEventPhrase(NUUTEventVoice* voice, float rootLow)
+{
+    auto rand01 = [voice]() {
+        voice->phRng = voice->phRng * 1664525u + 1013904223u;
+        return static_cast<float>(voice->phRng >> 8) / 16777216.0f;
+    };
+
+    const float sr = voice->sampleRate;
+    const float root = NUUTEventFoldFrequency(voice->chord[0], rootLow, 2.0f * rootLow);
+
+    bool inScale[12] = {};
+    bool inChord[12] = {};
+    static constexpr int BASE[6] = {0, 2, 4, 5, 7, 9};
+    for(int b : BASE)
+        inScale[b] = true;
+    for(int c = 0; c < 3; ++c)
+    {
+        int semi = static_cast<int>(
+            roundf(12.0f * log2f(voice->chord[c] / voice->chord[0])));
+        semi = ((semi % 12) + 12) % 12;
+        inScale[semi] = true;
+        inChord[semi] = true;
+    }
+
+    // One octave and a bit of scale steps (up to 11 semitones above the root).
+    int steps[16];
+    bool stepIsChord[16];
+    int stepCount = 0;
+    for(int semi = 0; semi < 12; ++semi)
+    {
+        if(inScale[semi])
+        {
+            steps[stepCount] = semi;
+            stepIsChord[stepCount] = inChord[semi];
+            ++stepCount;
+        }
+    }
+
+    // Start on a chord note: the root, or the 2nd / 3rd one (inversion).
+    int chordIdx[4];
+    int chordN = 0;
+    for(int k = 0; k < stepCount; ++k)
+        if(stepIsChord[k])
+            chordIdx[chordN++] = k;
+    int idx = chordIdx[(rand01() < 0.5f ? voice->inversion
+                                        : static_cast<int>(rand01() * chordN))
+                       % chordN];
+
+    int count = 3 + static_cast<int>(rand01() * 4.0f) % 4;   // 3..6
+    int dir = rand01() < 0.5f ? 1 : -1;
+    float t = 0.0f;
+    int prevIdx = -1;
+
+    static constexpr float LENGTHS[6] = {0.30f, 0.30f, 0.45f, 0.60f, 0.90f, 1.20f};
+
+    for(int k = 0; k < count; ++k)
+    {
+        const bool last = (k == count - 1);
+
+        if(last)
+        {
+            int best = idx;
+            int bestDist = 1000;
+            for(int j = 0; j < stepCount; ++j)
+            {
+                const int d = j > idx ? j - idx : idx - j;
+                if(stepIsChord[j] && d < bestDist && j != idx && j != prevIdx)
+                {
+                    best = j;
+                    bestDist = d;
+                }
+            }
+            idx = best;
+        }
+        prevIdx = idx;
+
+        float dur = last ? 1.4f + 0.6f * rand01()
+                         : LENGTHS[static_cast<int>(rand01() * 6.0f) % 6];
+        // A phrase never runs longer than about 4.5 s.
+        if(t + dur > 4.5f)
+            dur = fmaxf(0.3f, 4.5f - t);
+
+        voice->phFreq[k] = root * exp2f(static_cast<float>(steps[idx]) / 12.0f);
+        voice->phDur[k] = dur;
+        voice->phTime[k] = static_cast<std::size_t>(t * sr);
+        voice->phTrill[k] = last && dur >= 1.2f && rand01() < 0.4f;
+
+        // The next note starts a little before this one ends (legato).
+        t += dur * 0.85f;
+
+        if(rand01() < 0.30f)
+            dir = -dir;
+        const float s = rand01();
+        const int stride = s < 0.6f ? 1 : (s < 0.9f ? 2 : 3);
+        int next = idx + dir * stride;
+        if(next < 0 || next >= stepCount)
+        {
+            dir = -dir;
+            next = idx + dir * stride;
+        }
+        next = next < 0 ? 0 : (next >= stepCount ? stepCount - 1 : next);
+        // Never the same note twice in a row.
+        if(next == idx)
+            next = idx > 0 ? idx - 1 : idx + 1;
+        idx = next;
+
+        if(t > 4.4f)
+        {
+            count = k + 1;
+            break;
+        }
+    }
+
+    voice->phCount = count;
+    voice->phIdx = 0;
+    voice->phClock = 0;
+}
+
+// Called once per sample while a phrase plays: true when the next note of
+// the phrase starts now (then freq, dur and trill describe it).
+inline bool NUUTEventPhraseTick(
+    NUUTEventVoice* voice, float& freq, float& dur, bool& trill)
+{
+    if(voice->phCount <= 0)
+        return false;
+
+    bool fire = false;
+    if(voice->phClock >= voice->phTime[voice->phIdx])
+    {
+        const int k = voice->phIdx++;
+        freq = voice->phFreq[k];
+        dur = voice->phDur[k];
+        trill = voice->phTrill[k];
+        fire = true;
+        if(voice->phIdx >= voice->phCount)
+            voice->phCount = 0;
+    }
+    ++voice->phClock;
+    return fire;
+}
+
+
+#endif
+
+inline float ProcessNUUTEventVoiceCurrent(
     NUUTEventVoice* voice,
     bool trigger,
     float frequency,
@@ -1636,13 +2013,51 @@ inline float ProcessNUUTEventVoiceRaw(
     switch(voice->timbre)
     {
         case NUUTEventTimbre::CrystalBell:
+        {
+            voice->bell.inversion = voice->inversion;
+#if NUUT_FLUTE_PHRASE
+            // Half of the time the bells play a melody of single notes with
+            // long and short rings; the other half the old shower of notes.
+            if(trigger && voice->hasChord)
+            {
+                voice->phRng = voice->phRng * 1664525u + 1013904223u;
+                const float pick = voice->phrasesOn
+                    ? static_cast<float>(voice->phRng >> 8) / 16777216.0f : 1.0f;
+                if(pick < 0.5f)
+                {
+                    // A low or a high register, at random.
+                    BuildNUUTEventPhrase(voice, pick < 0.25f ? 330.0f : 660.0f);
+                    voice->bell.direct = true;
+                    trigger = false;
+                }
+                else
+                {
+                    voice->phCount = 0;
+                    voice->bell.direct = false;
+                }
+            }
+
+            float nf = frequency, nd = 0.0f;
+            bool nt = false;
+            if(NUUTEventPhraseTick(voice, nf, nd, nt))
+            {
+                voice->bell.decayScale = fminf(2.2f, 0.5f + 0.8f * nd);
+                voice->bell.singleVel = 0.6f + 0.35f * fminf(1.0f, nd / 1.2f);
+                return ProcessNUUTEventBell(&voice->bell, true, nf, nullptr);
+            }
+            if(voice->phCount > 0)
+                return ProcessNUUTEventBell(&voice->bell, false, nf, nullptr);
+            voice->bell.decayScale = 1.0f;
+#endif
             return ProcessNUUTEventBell(
                 &voice->bell,
                 trigger,
                 frequency,
                 voice->hasChord ? voice->chord : nullptr);
+        }
 
         case NUUTEventTimbre::Gong:
+            voice->gong.strikeGain = voice->repeatGain;
             return ProcessNUUTEventGong(
                 &voice->gong,
                 trigger,
@@ -1655,26 +2070,137 @@ inline float ProcessNUUTEventVoiceRaw(
                 voice->hasChord ? voice->chord[0] : frequency);
 
         case NUUTEventTimbre::Flute:
+        {
+#if !NUUT_FLUTE_PHRASE
             return ProcessNUUTEventFlute(
-                &voice->flute,
-                trigger,
-                frequency,
-                voice->hasChord ? voice->chord : nullptr,
-                voice->originRatio);
+                &voice->flute, trigger, frequency,
+                voice->hasChord ? voice->chord : nullptr, voice->originRatio);
+#else
+            if(trigger && (!voice->hasChord || !voice->phrasesOn))
+            {
+                voice->phCount = 0;
+                voice->flute.direct = false;
+                voice->flute.blowSeconds = 1.8f;
+                return ProcessNUUTEventFlute(
+                    &voice->flute, true, frequency,
+                    voice->hasChord ? voice->chord : nullptr,
+                    voice->originRatio);
+            }
+
+            if(trigger)
+                BuildNUUTEventPhrase(voice, 220.0f);
+
+            bool fire = false;
+            float fireFreq = frequency;
+
+            if(voice->phCount > 0)
+            {
+                if(voice->phClock >= voice->phTime[voice->phIdx])
+                {
+                    const int k = voice->phIdx++;
+                    fire = true;
+                    fireFreq = voice->phFreq[k];
+                    voice->flute.direct = true;
+                    voice->flute.directTrill = voice->phTrill[k];
+                    voice->flute.blowSeconds = voice->phDur[k];
+                    if(voice->phIdx >= voice->phCount)
+                        voice->phCount = 0;
+                }
+                ++voice->phClock;
+            }
+
+            return ProcessNUUTEventFlute(
+                &voice->flute, fire, fireFreq, nullptr, voice->originRatio);
+#endif
+        }
 
         case NUUTEventTimbre::String:
+        {
+            voice->string.inversion = voice->inversion;
+#if NUUT_FLUTE_PHRASE
+            // Half of the time the strings play a melody of single plucks
+            // (long and short notes); the other half the strum / spread.
+            if(trigger && voice->hasChord)
+            {
+                voice->phRng = voice->phRng * 1664525u + 1013904223u;
+                const float pick = voice->phrasesOn
+                    ? static_cast<float>(voice->phRng >> 8) / 16777216.0f : 1.0f;
+                if(pick < 0.5f)
+                {
+                    BuildNUUTEventPhrase(voice, 196.0f);
+                    voice->string.direct = true;
+                    trigger = false;
+                }
+                else
+                {
+                    voice->phCount = 0;
+                    voice->string.direct = false;
+                }
+            }
+
+            float nf = frequency, nd = 0.0f;
+            bool nt = false;
+            if(NUUTEventPhraseTick(voice, nf, nd, nt))
+            {
+                voice->string.decayScale = fminf(1.4f, 0.5f + 0.6f * nd);
+                voice->string.pluckVel = 0.6f + 0.4f * fminf(1.0f, nd / 1.2f);
+                const int n = voice->phRr++ % static_cast<int>(NUUTEventString::NOTE_COUNT);
+                return ProcessNUUTEventString(&voice->string, true, nf, n, nullptr);
+            }
+            if(voice->phCount > 0)
+                return ProcessNUUTEventString(&voice->string, false, nf, -1, nullptr);
+            voice->string.decayScale = 1.0f;
+            voice->string.direct = false;
+#endif
             return ProcessNUUTEventString(
                 &voice->string,
                 trigger,
                 frequency,
                 stringNoteIndex,
                 voice->hasChord ? voice->chord : nullptr);
+        }
 
         default:
             return 0.0f;
     }
 }
 
+
+// The current instrument, plus the tail of the previous one while it rings.
+inline float ProcessNUUTEventVoiceRaw(
+    NUUTEventVoice* voice,
+    bool trigger,
+    float frequency,
+    int stringNoteIndex = -1)
+{
+    float out = ProcessNUUTEventVoiceCurrent(
+        voice, trigger, frequency, stringNoteIndex);
+
+    if(voice->prevLeft > 0 && voice->prevTimbre != voice->timbre)
+    {
+        --voice->prevLeft;
+        switch(voice->prevTimbre)
+        {
+            case NUUTEventTimbre::CrystalBell:
+                out += ProcessNUUTEventBell(&voice->bell, false, frequency, nullptr);
+                break;
+            case NUUTEventTimbre::Gong:
+                out += ProcessNUUTEventGong(&voice->gong, false, frequency);
+                break;
+            case NUUTEventTimbre::TribalDrum:
+                out += ProcessNUUTEventTribalDrum(&voice->tribalDrum, false, frequency);
+                break;
+            case NUUTEventTimbre::Flute:
+                out += ProcessNUUTEventFlute(&voice->flute, false, frequency,
+                                             nullptr, voice->originRatio);
+                break;
+            case NUUTEventTimbre::String:
+                out += ProcessNUUTEventString(&voice->string, false, frequency, -1, nullptr);
+                break;
+        }
+    }
+    return out;
+}
 
 // Sets the brightness modulation of the events: how fast the cutoff
 // breathes (Hz), how far it falls from the ceiling (in octaves) and the
@@ -1739,6 +2265,7 @@ inline float ProcessNUUTEventVoice(
 // ============================================================
 
 // Semitone ratios used by the chords (equal temperament).
+constexpr float kSemi3  = 1.189207f;
 constexpr float kSemi4  = 1.259921f;
 constexpr float kSemi5  = 1.334840f;
 constexpr float kSemi7  = 1.498307f;
@@ -1773,7 +2300,7 @@ constexpr AspectProfile kAspectProfiles[5] =
     {"Sextile",     NUUTEventTimbre::String,      {kSemi5, kSemi10}, 0.45f, 0.04f,   0.11f, 2.5f, 9000.0f,  false, false}, // 0, +5, +10
     {"Square",      NUUTEventTimbre::TribalDrum,  {kSemi4, kSemi9},  2.00f, 0.10f,   0.50f, 2.0f, 9000.0f,  false, false}, // 0, +4, +9
     {"Trine",       NUUTEventTimbre::Flute,       {kSemi4, kSemi7},  0.12f, 0.05f,   0.09f, 2.0f, 9000.0f,  false, false}, // 0, +4, +7
-    {"Opposition",  NUUTEventTimbre::Gong,        {kSemi4, kSemi7},  0.65f, 0.08f,   0.05f, 2.5f, 9000.0f,  false, true }  // 0, +4, +7
+    {"Opposition",  NUUTEventTimbre::Gong,        {kSemi3, kSemi7},  0.65f, 0.08f,   0.05f, 2.5f, 9000.0f,  false, true }  // 0, +3, +7 (dark: minor)
 };
 
 // Returns the profile of an aspect, or nullptr when there is none.

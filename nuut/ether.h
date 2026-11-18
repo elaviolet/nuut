@@ -38,9 +38,9 @@ constexpr float kFilterSweepHz  = 900.0f;
 constexpr float kFilterLfoHz    = 0.057f;
 constexpr float kFilterRes      = 0.45f;
 constexpr float kFilterMaxMix   = 0.55f;
-// Brightness: a little of the SAME filter's band-pass output is added on top
-// (no extra filter, so no extra CPU). It comes in when the fader goes DOWN.
-constexpr float kBrightMaxGain  = 0.12f;
+// Brightness: a gentle high shelf (no resonance) that comes in when the fader
+// goes DOWN, together with the FM.
+constexpr float kBrightMaxGain  = 0.60f;  // high-shelf amount (air) at the bottom of the fader
 
 // Stereo echo
 constexpr float kEchoTimeL            = 0.31f;  // seconds
@@ -113,7 +113,9 @@ public:
 
         combMix_      = a * kCombMaxMix;
         combFeedback_ = kCombFeedbackMin + a * (kCombFeedbackMax - kCombFeedbackMin);
-        filterMix_    = a * kFilterMaxMix;
+        // The resonant sweeping low-pass is switched off: its peak sweeping
+        // over the harmonics of low notes gave a harsh, bright burst.
+        filterMix_    = 0.0f * a * kFilterMaxMix;
         echoSend_     = kEchoBaseSend + a * kEchoAlchemySend;
         echoFeedback_ = kEchoBaseFeedback + a * kEchoAlchemyFeedback;
     }
@@ -126,34 +128,40 @@ public:
     }
 
     // Mono in, mono out: low-pass + modulated comb.
-    float ProcessColor(float in)
+    __attribute__((optimize("O2"))) float ProcessColor(float in)
     {
         using namespace nuut_ethereal;
 
-        combPhase_ += kCombLfoHz * invSampleRate_;
-        if(combPhase_ >= 1.0f)
-            combPhase_ -= 1.0f;
-
-        filterPhase_ += kFilterLfoHz * invSampleRate_;
-        if(filterPhase_ >= 1.0f)
-            filterPhase_ -= 1.0f;
-
-        // Filter cutoff is updated every 32 samples (SetFreq is not free).
-        if((++counter_ & 31u) == 0u)
+        // The slow LFOs (well under 1 Hz) are refreshed every 8 samples: the
+        // difference cannot be heard, and it saves the sine and the phase
+        // updates on seven samples out of eight.
+        if((counter_ & 7u) == 7u)
         {
-            filter_.SetFreq(kFilterCenterHz
-                            + kFilterSweepHz * EtherealSin01(filterPhase_));
+            combPhase_ += kCombLfoHz * invSampleRate_ * 8.0f;
+            if(combPhase_ >= 1.0f)
+                combPhase_ -= 1.0f;
+
+            // The next value is reached in 8 steps (no sudden jumps in the
+            // delay time, which would sound like a faint buzz).
+            combLfoStep_ = (EtherealSin01(combPhase_) - combLfo_) * 0.125f;
+        }
+        combLfo_ += combLfoStep_;
+
+        ++counter_;
+
+        // Brightness (comes in with the fader going down, together with the FM):
+        // a gentle high shelf. A one-pole low-pass (about 2.7 kHz) is
+        // subtracted from the signal and the difference is added back: no
+        // resonance, so it cannot ring or crackle, it only adds air.
+        float x = in;
+        if(brightGain_ > 0.003f)
+        {
+            air_ += 0.30f * (in - air_);
+            x = in + (in - air_) * brightGain_;
         }
 
-        filter_.Process(in);
-        const float low = filter_.Low();
-        float x = in + (low - in) * filterMix_;
-        // Brightness (only when Alchemy is raised): band-pass of the same filter.
-        if(brightGain_ > 0.003f)
-            x += filter_.Band() * brightGain_;
-
         // Comb with a slowly modulated, fractionally interpolated delay.
-        const float lfo   = EtherealSin01(combPhase_);
+        const float lfo   = combLfo_;
         const float delay = combBaseDelay_ * (1.0f - kCombDepth * lfo);
 
         const float d = combLine_.Read(delay);
@@ -166,15 +174,22 @@ public:
     }
 
     // Mono in, stereo echo out (already scaled by the send amount).
-    void ProcessEcho(float in, float& left, float& right)
+    __attribute__((optimize("O2"))) void ProcessEcho(float in, float& left, float& right)
     {
         using namespace nuut_ethereal;
 
-        echoPhase_ += kEchoLfoHz * invSampleRate_;
-        if(echoPhase_ >= 1.0f)
-            echoPhase_ -= 1.0f;
-
-        const float mod = EtherealSin01(echoPhase_) * echoModSamples_;
+        // Same here: the echo wobble is refreshed every 8 samples.
+        if((counter_ & 7u) == 3u)
+        {
+            echoPhase_ += kEchoLfoHz * invSampleRate_ * 8.0f;
+            if(echoPhase_ >= 1.0f)
+                echoPhase_ -= 1.0f;
+            // Reached in 8 steps: a stepped delay time would buzz.
+            echoModStep_
+                = (EtherealSin01(echoPhase_) * echoModSamples_ - echoMod_) * 0.125f;
+        }
+        echoMod_ += echoModStep_;
+        const float mod = echoMod_;
 
         float delayL = echoBaseL_ + mod;
         float delayR = echoBaseR_ - mod;
@@ -226,5 +241,10 @@ private:
     float echoSend_     = 0.10f;
     float echoFeedback_ = 0.42f;
 
+    float combLfo_ = 0.0f;
+    float combLfoStep_ = 0.0f;
+    float echoMod_ = 0.0f;
+    float echoModStep_ = 0.0f;
+    float air_ = 0.0f;
     unsigned counter_ = 0;
 };

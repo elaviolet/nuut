@@ -15,6 +15,8 @@ DAISYSP_DIR = lib/DaisySP/
 # Core location, and generic Makefile.
 SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
 
+APP_TYPE = BOOT_SRAM
+
 include $(SYSTEM_FILES_DIR)/Makefile
 
 CPP_STANDARD = -std=gnu++17

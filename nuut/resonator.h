@@ -58,7 +58,7 @@ inline void InitNUUTModalResonator(
 }
 
 
-inline float ProcessNUUTModalResonator(
+__attribute__((optimize("O2"))) inline float ProcessNUUTModalResonator(
     NUUTModalResonator* r,
     float input,
     float baseFrequency,

@@ -1,6 +1,13 @@
-// The audio code is compiled for speed (-O2) even though the project uses -Os
-// (to fit in flash). If the build runs out of flash, remove this line first.
+// FLASH: the audio code is compiled for speed (-O2) even though the project
+// uses -Os. If the build runs out of flash, set NUUT_FAST to 0 first.
+#define NUUT_FAST 1
+#if NUUT_FAST
+#define NUUT_O2 __attribute__((optimize("O2")))
+#else
+#define NUUT_O2
+#endif
 #include "daisy_seed.h"
+#include <new>
 #include <cmath>
 #include "daisysp.h"
 #include "Utility/delayline.h"
@@ -14,13 +21,20 @@
 #include "nuut/events.h"
 #include "nuut/crystals.h"
 #include "nuut/ether.h"
-#include "nuut/chord_flow.h"
+
+// MIDI over USB (the web pages follow the Touch). 0 = off.
+#define NUUT_MIDI 1
+#if NUUT_MIDI
+#include "nuut/nuut_midi.h"
+NuutMidiState g_nuutMidiState;
+static NuutMidi nuutMidi;
+#endif
 
 using namespace daisy;
 using namespace daisysp;
 
 // Set to 0 to disable the once-per-second CPU load print over USB serial.
-#define NUUT_CPU_LOG 0
+#define NUUT_CPU_LOG 0   // must stay 0 while NUUT_MIDI is 1 (both use the USB port)
 
 // Per-section cost, cycles per sample (budget about 10000). Only active with
 // NUUT_CPU_LOG 1. Sections: events, main voices, extra voices, comb/peak,
@@ -54,10 +68,6 @@ constexpr int kNumExtraVoices  = 7;
 constexpr int kNumVoicesInUse  = kNumMainVoices + kNumExtraVoices;
 constexpr int kNumVoiceSlots   = 14;
 
-// Extra voices 4..6 double as the chord pad.
-constexpr int kChordFirstExtra = 4;
-constexpr int kChordLastExtra  = 6;
-
 // Which planet each touch pad plays (pad 0..9 -> planet index).
 // Planet indices: 0 Mercury, 1 Venus, 2 Sun, 3 Mars, 4 Jupiter,
 // 5 Saturn, 6 Uranus, 7 Neptune, 8 Pluto, 9 Moon.
@@ -86,9 +96,41 @@ volatile bool shiftHeld = false;
 
 constexpr float kTwoPi = 6.2831853f;
 
-// Transit 
-constexpr float kTransitSlowPerSample = 0.00005f / 48.0f;
-constexpr float kTransitFastPerSample = 0.00015f / 48.0f;
+// Transit switch (top / middle / bottom): Linger / Off / On.
+//   Off    the sky stands still; the Transit fader moves it (relative).
+//   On     the fader sets the speed: one full cycle in 120 s ... 5 s.
+//   Linger like On, but the sky slows down when two planets near an aspect.
+// Shift + Transit fader = amount of melody. Shift + Hold = freeze the sky.
+constexpr float kCycleSlowSeconds = 120.0f;
+constexpr float kCycleFastSeconds = 5.0f;
+
+// Planet personalities (traditional character -> musical behaviour).
+// The planet that was pressed first (the chord root) sets the rhythm and
+// the touch; the other planet sets the voicing (inversion) of the chord.
+// Order: Mercury Venus Sun Mars Jupiter Saturn Uranus Neptune Pluto Moon.
+struct PlanetPersona
+{
+    float period;     // spacing of the melody (1 = normal)
+    float irregular;  // how uneven the spacing is (0..1)
+    float touch;      // strength of the event (0..1)
+    uint8_t voicing;  // inversion given when it is the second planet (0..2)
+};
+constexpr PlanetPersona kPersona[10] = {
+    {0.30f, 0.5f, 0.65f, 1},  // Mercury: fast, light, unpredictable
+    {0.75f, 0.1f, 0.75f, 0},  // Venus:   singing, even
+    {1.00f, 0.1f, 0.90f, 0},  // Sun:     full, confident
+    {0.50f, 0.0f, 1.00f, 0},  // Mars:    marked, regular, strong
+    {1.10f, 0.2f, 0.80f, 1},  // Jupiter: wide, rising
+    {2.40f, 0.1f, 0.70f, 0},  // Saturn:  few notes, slow
+    {0.90f, 1.0f, 0.70f, 2},  // Uranus:  sudden, uneven
+    {1.80f, 0.4f, 0.50f, 2},  // Neptune: soft, drifting
+    {3.00f, 0.3f, 0.80f, 0},  // Pluto:   rare, deep
+    {0.80f, 0.7f, 0.60f, 1},  // Moon:    changeable
+};
+// Minimum time (s) between two melody gestures: the instrument must be
+// able to finish its phrase (same order as the AspectType: bell, string,
+// drum, flute, gong).
+constexpr float kGestureSeconds[5] = {3.5f, 4.0f, 1.6f, 5.0f, 8.0f};
 
 constexpr float kConstellationGain = 1.10f;
 constexpr float kEventGain         = 0.008f;
@@ -110,13 +152,11 @@ constexpr bool kEnableColor    = true;   // Alchemy stage: comb + bright peak
 constexpr bool kEnableEcho     = true;   // Alchemy stage: stereo echo
 constexpr bool kEnableEvents   = true;   // aspect event voice (bell, string, ...)
 
-constexpr float kMelodyNoteSeconds = 0.5f;
-
 
 // Chords, instruments, modulation and the chord pad of each aspect are
 // in nuut/events.h, in the table "ASPECT PROFILES" (one row per aspect).
 
-inline float FastTanh(float x)
+NUUT_O2 inline float FastTanh(float x)
 {
     if(x > 3.0f)
         return 1.0f;
@@ -141,7 +181,11 @@ float eventBellFrequency = 432.0f;
 uint32_t eventQuietSamples = 0;
 
 // Global Alchemy stage: sweeping filter, slow comb and stereo echo.
-EtherealStage ethereal;
+// Its delay lines (about 100 KB) live in the external SDRAM: with the
+// bootloader (BOOT_SRAM) the variables must fit in the 128 KB DTCM. The object
+// is built in main(), after the SDRAM has been started.
+DSY_SDRAM_BSS uint8_t etherealMem[sizeof(EtherealStage)] __attribute__((aligned(8)));
+EtherealStage& ethereal = *reinterpret_cast<EtherealStage*>(etherealMem);
 
 // Global stereo delay used for the main reverb.
 DSY_SDRAM_BSS daisysp::ReverbSc reverb;
@@ -151,8 +195,11 @@ Knobs knobs;
 Switches switches;
 Constellation constellation;
 Transit transit;
-Crystals crystals;
-ChordFlow chordFlow;
+// The crystal delay lines (about 224 KB) live in the external SDRAM: the
+// internal SRAM was full once the USB MIDI buffers were added. The object is
+// built in main(), after the SDRAM has been started.
+DSY_SDRAM_BSS uint8_t crystalsMem[sizeof(Crystals)] __attribute__((aligned(8)));
+Crystals& crystals = *reinterpret_cast<Crystals*>(crystalsMem);
 
 // ============================================================
 // GLOBAL CONTROL STATE
@@ -173,20 +220,23 @@ volatile bool holdEnabled = false;
 
 float transitPosition = 0.0f;
 
+// Freeze (Shift + Hold): the sky stops where it is.
+volatile bool skyFrozen = false;
+
 constexpr int MELODY_LENGTH = 3;
 float melodyNotes[MELODY_LENGTH] = {};
-
-int melodyStep   = 0;
-int melodyLength = 3;
 
 int melodyLastAspect = ASPECT_NONE;
 int melodyLastA      = -1;
 int melodyLastB      = -1;
 
-size_t melodyNoteIntervalSamples = 24000; // set from the sample rate in main()
-size_t melodySamplesUntilNext    = 0;
-float melodyCurrentFrequency     = 432.0f;
 bool melodyActive                = false;
+bool lastEventWasGong            = false;
+int  gongRepeats                 = 0;   // repeats of the gong in this aspect
+float melodyTimer                = 0.0f;   // seconds until the next gesture
+float eventTouch                 = 0.8f;   // strength of the events (planet)
+float eventTouchTarget           = 0.8f;
+uint32_t melodyRng               = 2463534242u;
 
 bool AnyPadActive();
 
@@ -197,9 +247,21 @@ bool AnyPadActive();
 void OnPadTouch(uint16_t pad)
 {
     // Pad 11 toggles Hold mode.
+    if(pad == kHoldPad && shiftHeld)
+    {
+        skyFrozen = !skyFrozen;
+#if NUUT_MIDI
+        nuutMidi.Freeze(skyFrozen);
+#endif
+        return;
+    }
+
     if(pad == kHoldPad)
     {
         holdEnabled = !holdEnabled;
+#if NUUT_MIDI
+        nuutMidi.Hold(holdEnabled);
+#endif
         if(holdEnabled)
         {
             hw.SetLed(true);
@@ -220,12 +282,18 @@ void OnPadTouch(uint16_t pad)
     if(pad == kShiftPad)
     {
         shiftHeld = true;
+#if NUUT_MIDI
+        nuutMidi.Shift(true);
+#endif
         return;
     }
 
     // Pads 0-9 select planets.
     if(pad < kNumPads)
     {
+#if NUUT_MIDI
+        nuutMidi.Pad(pad, true);
+#endif
         const uint16_t planet = kPadToPlanet[pad];
         // In Hold the pads add up like when you play them together.
         // Touching a planet that is already held lets it go.
@@ -276,11 +344,17 @@ void OnPadRelease(uint16_t pad)
     if(pad == kShiftPad)
     {
         shiftHeld = false;
+#if NUUT_MIDI
+        nuutMidi.Shift(false);
+#endif
         return;
     }
 
     if(pad < kNumPads)
     {
+#if NUUT_MIDI
+        nuutMidi.Pad(pad, false);
+#endif
         const uint16_t planet = kPadToPlanet[pad];
         if(holdEnabled)
             return;
@@ -309,7 +383,7 @@ bool AnyPadActive()
 // AUDIO CALLBACK
 // ============================================================
 
-__attribute__((optimize("O2")))
+NUUT_O2
 void AudioCallback(AudioHandle::InputBuffer in,
                    AudioHandle::OutputBuffer out,
                    size_t size)
@@ -331,23 +405,104 @@ void AudioCallback(AudioHandle::InputBuffer in,
     const float kosmosMoved = fabsf(kosmosNow - lastKosmos);
     lastKosmos = kosmosNow;
 
+    const float sampleRate = hw.AudioSampleRate();
+    const float blockSeconds = static_cast<float>(size) / sampleRate;
+
+    // --------------------------------------------------------
+    // SHIFT LAYER
+    // While Shift is held, the Alchemy fader sets the waveform and the
+    // Transit fader sets the amount of melody. Each value is picked up again
+    // only when the fader crosses it, so nothing jumps when Shift changes.
+    // --------------------------------------------------------
+    static bool  alchemyLocked = false;
+    static bool  morphLocked   = true;
+    static bool  transitLocked = false;
+    static bool  melodyLocked  = true;
+    static bool  lastShift     = false;
+    static float transitFader  = 0.0f;   // stored Transit fader value
+    static float melodyFader   = 0.4f;   // stored melody amount
+    const bool shift = shiftHeld;
+    if(shift != lastShift)
+    {
+        if(shift)
+        {
+            morphLocked  = true;
+            melodyLocked = true;
+        }
+        else
+        {
+            alchemyLocked = true;
+            transitLocked = true;
+        }
+        lastShift = shift;
+    }
+
     // --------------------------------------------------------
     // TRANSIT CONTROL
     // --------------------------------------------------------
     const float transitKnob = knobs.s36().Process();
-    const int transitMode   = switches.B();
-    if(transitMode == Switch3::POS_CENTER)
+    const int transitSwitch = switches.B();   // UP Linger, CENTER Off, DOWN On
+    float transitDelta = 0.0f;                // fader movement (Off mode)
+    static bool transitStarted = false;
+    if(!transitStarted)
     {
-        transitPosition = transitKnob;
+        transitStarted = true;
+        transitFader   = transitKnob;         // no jump at power-up
+    }
+    if(!shift)
+    {
+        if(transitLocked)
+        {
+            if(fabsf(transitKnob - transitFader) < 0.04f)
+            {
+                transitLocked = false;
+                transitFader  = transitKnob;
+            }
+        }
+        else
+        {
+            transitDelta = transitKnob - transitFader;
+            transitFader = transitKnob;
+        }
     }
     else
     {
-        float speedPerSample = kTransitSlowPerSample;
-        if(transitMode == Switch3::POS_DOWN)
-            speedPerSample = kTransitFastPerSample;
-        transitPosition += speedPerSample * static_cast<float>(size);
-        if(transitPosition > 1.0f)
+        if(melodyLocked && fabsf(transitKnob - melodyFader) < 0.04f)
+            melodyLocked = false;
+        if(!melodyLocked)
+            melodyFader = transitKnob;
+    }
+
+    // Only the planets of the three main voices can form an aspect.
+    unsigned aspectMask = 0;
+    for(int v = 0; v < kNumMainVoices; v++)
+    {
+        const int p = constellation.GetPlanet(v);
+        if(p >= 0 && p < 10)
+            aspectMask |= 1u << p;
+    }
+
+    if(!skyFrozen)
+    {
+        if(transitSwitch == Switch3::POS_CENTER)
+        {
+            // Off: the fader moves the sky from where it is.
+            transitPosition += transitDelta;
+        }
+        else
+        {
+            // On / Linger: the fader is the speed of the sky.
+            const float cycle = kCycleSlowSeconds
+                * powf(kCycleFastSeconds / kCycleSlowSeconds, transitFader);
+            float speed = 1.0f;
+            if(transitSwitch == Switch3::POS_UP)
+                speed = transit.LingerFactor(aspectMask);
+            transitPosition += blockSeconds / cycle * speed;
+        }
+        while(transitPosition >= 1.0f)
             transitPosition -= 1.0f;
+        while(transitPosition < 0.0f)
+            transitPosition += 1.0f;
     }
     transit.SetPosition(transitPosition);
 
@@ -364,7 +519,16 @@ void AudioCallback(AudioHandle::InputBuffer in,
     int aspectB            = -1;
     float aspectDistance   = 0.0f;
     const int currentAspect
-        = transit.FindAspect(aspectA, aspectB, aspectDistance);
+        = transit.FindAspect(aspectA, aspectB, aspectDistance, aspectMask);
+
+    // The planet pressed first is the root of the chord.
+    if(currentAspect != ASPECT_NONE && aspectA >= 0 && aspectB >= 0
+       && padOrder[aspectB] < padOrder[aspectA])
+    {
+        const int t = aspectA;
+        aspectA     = aspectB;
+        aspectB     = t;
+    }
 
     float aspectProximity = 0.0f;
     if(currentAspect != ASPECT_NONE)
@@ -376,83 +540,160 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
     // --------------------------------------------------------
     // MELODY GENERATION
-    // Build a note phrase when the detected aspect changes.
+    // A new aspect (or a new pair of planets) starts an event: chord,
+    // instrument, voicing. While it lasts, the melody layer plays the
+    // instrument again and again, at the pace of the root planet.
+    //
+    // Two protections against a messy overlap of events:
+    //  - an aspect that drops out for less than half a second (the sky
+    //    jitters at the edge of the orb) is not a new event;
+    //  - a new event waits until the last one has had time to sound
+    //    (0.6 s; 0.25 s for the drum, so it can follow the planets rhythmically;
+    //    3 s after a gong; a second gong waits 10 s after the last one).
     // --------------------------------------------------------
-    if(currentAspect != ASPECT_NONE && aspectA >= 0 && aspectB >= 0)
+    static float noAspectTime  = 0.0f;
+    static float sinceEvent    = 99.0f;
+    static bool  startDeferred = false;
+    sinceEvent += blockSeconds;
+    static float sinceGong = 99.0f;
+    sinceGong += blockSeconds;
+
+    const AspectProfile* profile = GetAspectProfile(currentAspect);
+    if(profile != nullptr && aspectA >= 0 && aspectB >= 0)
     {
+        noAspectTime = 0.0f;
         if(!melodyActive || currentAspect != melodyLastAspect
            || aspectA != melodyLastA || aspectB != melodyLastB)
         {
-            // Generator planet is the chord root, folded into 220-880 Hz.
-            float rootFrequency = planets[aspectA].frequency;
+            melodyActive     = true;
+            melodyLastAspect = currentAspect;
+            melodyLastA      = aspectA;
+            melodyLastB      = aspectB;
+            startDeferred    = true;
+        }
+    }
+    else
+    {
+        noAspectTime += blockSeconds;
+        if(noAspectTime > 0.5f)
+        {
+            melodyActive     = false;
+            melodyLastAspect = ASPECT_NONE;
+            melodyLastA      = -1;
+            melodyLastB      = -1;
+            startDeferred    = false;
+        }
+    }
+
+    if(startDeferred && melodyActive && anyPadActive)
+    {
+        const AspectProfile* sp = GetAspectProfile(melodyLastAspect);
+        // A gong waits for the last gong to ring out; any other event only
+        // waits a moment (3 s after a gong, so its tail is not cut at once).
+        // The gong answers at once, like the drum (it only keeps a short
+        // distance from the last gong, so a planet at the edge of the orb
+        // cannot strike it again and again).
+        const bool quick = sp->timbre == NUUTEventTimbre::TribalDrum || sp->singleNote;
+        const float need = quick ? 0.25f : (lastEventWasGong ? 1.5f : 0.6f);
+        if(sinceEvent >= need && (!sp->singleNote || sinceGong >= 1.5f))
+        {
+            // The root planet is the root of the chord, folded into 220-880 Hz.
+            float rootFrequency = planets[melodyLastA].frequency;
             while(rootFrequency < 220.0f)
                 rootFrequency *= 2.0f;
             while(rootFrequency > 880.0f)
                 rootFrequency *= 0.5f;
 
-            const ChordRatios* chord = ChordForAspect(currentAspect);
-            if(chord != nullptr)
-            {
-                melodyNotes[0] = rootFrequency;
-                melodyNotes[1] = rootFrequency * chord->second;
-                melodyNotes[2] = rootFrequency * chord->third;
-                melodyLength   = 3;
+            melodyNotes[0] = rootFrequency;
+            melodyNotes[1] = rootFrequency * sp->chord.second;
+            melodyNotes[2] = rootFrequency * sp->chord.third;
 
-                SetNUUTEventChord(&eventVoice,
-                                  melodyNotes[0],
-                                  melodyNotes[1],
-                                  melodyNotes[2]);
+            SetNUUTEventChord(&eventVoice,
+                              melodyNotes[0],
+                              melodyNotes[1],
+                              melodyNotes[2]);
+            // The second planet chooses the voicing of the chord.
+            eventVoice.inversion = kPersona[melodyLastB].voicing;
 
-                chordFlow.NewChord(melodyNotes[0],
-                                   melodyNotes[1],
-                                   melodyNotes[2]);
-            }
-            else
-            {
-                melodyLength = 0;
-            }
+            SetNUUTEventTimbre(&eventVoice, sp->timbre);
+            // A single-note event (the gong) uses only the root.
+            if(sp->singleNote)
+                eventBellFrequency = melodyNotes[0];
 
-            if(melodyLength > 0)
-            {
-                // Start with the first chord note active.
-                melodyStep             = 1;
-                melodyCurrentFrequency = melodyNotes[0];
-                melodySamplesUntilNext = melodyNoteIntervalSamples;
+            eventTouchTarget = kPersona[melodyLastA].touch;
+            eventVoice.repeatGain = 1.0f;
+            melodyTimer      = kGestureSeconds[melodyLastAspect];
 
-                // Select the event timbre according to the detected aspect.
-                const AspectProfile* profile = GetAspectProfile(currentAspect);
-                if(profile != nullptr)
-                {
-                    SetNUUTEventTimbre(&eventVoice, profile->timbre);
-
-                    // A single-note event (the gong) uses only the root.
-                    if(profile->singleNote)
-                        eventBellFrequency = melodyNotes[0];
-                }
-
-                // Trigger the bell only when a planet is active.
-                if(anyPadActive)
-                    eventBellTriggerPending = true;
-
-                melodyActive = true;
-            }
-            else
-            {
-                melodyActive = false;
-            }
-
-            melodyLastAspect = currentAspect;
-            melodyLastA      = aspectA;
-            melodyLastB      = aspectB;
+            eventBellTriggerPending = true;
+            sinceEvent       = 0.0f;
+            if(sp->singleNote)
+                sinceGong = 0.0f;
+            lastEventWasGong = sp->singleNote;
+            gongRepeats      = 0;
+            startDeferred    = false;
         }
     }
-    else
+
+    // Melody layer: the same event is played again when the timer runs out.
+    // The root planet sets the pace, the melody amount (Shift + Transit
+    // fader) sets how often.
+    // The gong (single-note event) rings once per aspect: it does not repeat.
+    // The gong repeats at most twice, far apart (a gong that keeps sounding
+    // is a mess); the other instruments go on for as long as the aspect lasts.
+    const bool lastIsGong = melodyActive && GetAspectProfile(melodyLastAspect)->singleNote;
+    if(melodyActive && !startDeferred && anyPadActive && melodyFader > 0.03f
+       && (!lastIsGong || gongRepeats < 1))
     {
-        melodyActive     = false;
-        melodyLastAspect = ASPECT_NONE;
-        melodyLastA      = -1;
-        melodyLastB      = -1;
+        melodyTimer -= blockSeconds;
+        if(melodyTimer <= 0.0f)
+        {
+            melodyRng = melodyRng * 1664525u + 1013904223u;
+            const float r = static_cast<float>(melodyRng >> 8) / 16777216.0f;
+            const PlanetPersona& pa = kPersona[melodyLastA];
+            // The drum repeats faster (a rhythm), the others take their time.
+            const float pace = melodyLastAspect == 2 ? 2.4f : 4.0f;
+            const float gap = pa.period * pace / (0.35f + 1.4f * melodyFader)
+                              * (1.0f + pa.irregular * (r - 0.5f) * 1.4f);
+            melodyTimer = kGestureSeconds[melodyLastAspect] + gap;
+            eventVoice.repeatGain = 0.5f;   // repeats are softer (gong)
+            if(lastIsGong)
+            {
+                ++gongRepeats;
+                // Steady tolls: same distance, same weight, a little softer.
+                melodyTimer = 8.0f;
+                eventVoice.repeatGain = 0.6f;
+            }
+
+            // Variation: every repeat is a little different.
+            melodyRng = melodyRng * 1664525u + 1013904223u;
+            const float r2 = static_cast<float>(melodyRng >> 8) / 16777216.0f;
+            melodyRng = melodyRng * 1664525u + 1013904223u;
+            const float r3 = static_cast<float>(melodyRng >> 8) / 16777216.0f;
+            melodyRng = melodyRng * 1664525u + 1013904223u;
+            const float r4 = static_cast<float>(melodyRng >> 8) / 16777216.0f;
+
+            // Voicing: half of the time the one of the second planet,
+            // otherwise any of the three.
+            eventVoice.inversion = r2 < 0.5f
+                ? kPersona[melodyLastB].voicing
+                : static_cast<int>(r3 * 3.0f) % 3;
+            // Touch: stronger or softer, within a quarter.
+            eventTouchTarget = lastIsGong ? kPersona[melodyLastA].touch
+                                          : kPersona[melodyLastA].touch * (0.75f + 0.25f * r3);
+            // Now and then the instrument rests: one gesture is skipped
+            // (never the gong: its tolls are steady).
+            if(!lastIsGong && r4 < 0.2f)
+                melodyTimer = kGestureSeconds[melodyLastAspect] * 0.6f + gap;
+            else
+            {
+                eventBellTriggerPending = true;
+                sinceEvent = 0.0f;
+            }
+        }
     }
+    eventTouch += 0.05f * (eventTouchTarget - eventTouch);
+    // Melody at zero: the events play their old single gesture, once.
+    eventVoice.phrasesOn = melodyFader > 0.03f;
 
     // --------------------------------------------------------
     // SOUND CONTROLS
@@ -494,25 +735,10 @@ void AudioCallback(AudioHandle::InputBuffer in,
     // jumps when the pad is pressed or released.
     static float alchemyFader   = 0.0f;   // stored Alchemy fader value
     static float morphFader     = 1.0f;   // stored morph value
-    static bool  alchemyLocked  = false;
-    static bool  morphLocked    = true;
-    static bool  lastShift      = false;
     static float alchemySmoothed = 0.0f;
     static float morphSmoothedMain = 1.0f;
 
     const float alchemyRaw = knobs.s37().Process();
-    const bool  shift      = shiftHeld;
-
-    if(shift != lastShift)
-    {
-        // The fader is now owned by the other function, which must be
-        // picked up when the fader reaches its stored value.
-        if(shift)
-            morphLocked = true;
-        else
-            alchemyLocked = true;
-        lastShift = shift;
-    }
 
     if(!shift)
     {
@@ -531,18 +757,14 @@ void AudioCallback(AudioHandle::InputBuffer in,
 
     alchemySmoothed   += 0.012f * (alchemyFader - alchemySmoothed);
     morphSmoothedMain += 0.012f * (morphFader - morphSmoothedMain);
-    // Fader all up = normal sound, fader going down = more Alchemy (FM, bright
-    // peak, comb, faster crystals). The last 20% of the range is cut: Alchemy
-    // never goes below 0.2.
     const float Alchemy = 0.2f + 0.8f * alchemySmoothed;
     // Fader all up = sine, all down = saw.
     const float waveMorph = 1.0f - morphSmoothedMain;
     ethereal.SetAlchemy(Alchemy);
-    // Brightness (FM + bright band-pass): 0 from the top down to the middle of
-    // the fader, it reaches its maximum at 15% from the bottom and stays there
-    // (the very bottom of the fader does not go any further).
-    const float Bright
-        = fminf(1.0f, fmaxf(0.0f, (0.5f - alchemySmoothed) / 0.35f));
+    // FM + brightness amount: starts gently a little below the top of the
+    // fader (at 65%) and rises smoothly (smoothstep) to 1 at the very bottom.
+    const float bLin = fminf(1.0f, fmaxf(0.0f, (0.65f - alchemySmoothed) / 0.65f));
+    const float Bright = bLin * bLin * (3.0f - 2.0f * bLin);
     ethereal.SetBrightness(Bright);
 
     const float crystalRefraction = knobs.s34().Process();
@@ -550,6 +772,34 @@ void AudioCallback(AudioHandle::InputBuffer in,
     const float crystalWet        = knobs.s35().Process();
     const float crystalDry        = 1.0f - crystalWet;
     const auto crystalMode        = switches.A();
+
+#if NUUT_MIDI
+    // Values for the web pages (sent from the main loop, not from here).
+    g_nuutMidiState.ctrl[0] = constellationValue;   // Celestia
+    g_nuutMidiState.ctrl[1] = originValue;
+    g_nuutMidiState.ctrl[2] = kosmosNow;
+    g_nuutMidiState.ctrl[3] = arcValue;
+    g_nuutMidiState.ctrl[4] = crystalRefraction;
+    g_nuutMidiState.ctrl[5] = crystalWet;
+    g_nuutMidiState.ctrl[6] = transitFader;
+    g_nuutMidiState.ctrl[7] = alchemyFader;
+    g_nuutMidiState.melody  = melodyFader;
+    g_nuutMidiState.morph   = morphFader;
+    g_nuutMidiState.transitPos = transitPosition;
+    // Web: 0 obsidian, 1 amethyst, 2 aquamarine
+    g_nuutMidiState.crystal
+        = crystalMode == Switch3::POS_DOWN ? 0
+          : (crystalMode == Switch3::POS_CENTER ? 1 : 2);
+    // Web (CC41): 0 = Linger (up), 64 = Off (middle), 127 = On (down).
+    g_nuutMidiState.transitMode
+        = transitSwitch == Switch3::POS_UP ? 0
+          : (transitSwitch == Switch3::POS_CENTER ? 1 : 2);
+    g_nuutMidiState.aspect
+        = currentAspect == ASPECT_NONE ? 0 : currentAspect + 1;
+    g_nuutMidiState.aspectA = aspectA < 0 ? 0 : aspectA;
+    g_nuutMidiState.aspectB = aspectB < 0 ? 0 : aspectB;
+    g_nuutMidiState.proximity = aspectProximity;
+#endif
 
     // KOSMOS: zone 0 = planets as they are, zones 1..9 = nine chords built on
     // the root (voice 1). The zone has a little
@@ -578,48 +828,19 @@ void AudioCallback(AudioHandle::InputBuffer in,
     kosmosRatio[2] = KosmosDegreeRatio(kosmosRootHz, voices[2].frequency,
                                        kosmosZone, 1);
 
-    // --------------------------------------------------------
-    // MELODY TIMER (advanced once per block)
-    // Adds one chord note every kMelodyNoteSeconds; notes already
-    // activated stay on.
-    // --------------------------------------------------------
-    int stringNoteIndex = -1;
-    if(melodyActive && anyPadActive && melodyLength > 0
-       && melodyStep < melodyLength)
-    {
-        if(melodySamplesUntilNext > size)
-        {
-            melodySamplesUntilNext -= size;
-        }
-        else
-        {
-            ++melodyStep;
-            if(melodyStep <= melodyLength)
-                stringNoteIndex = melodyStep - 1;
-            melodySamplesUntilNext = melodyNoteIntervalSamples;
-        }
-    }
-
     const bool eventTrigger = eventBellTriggerPending && anyPadActive;
     eventBellTriggerPending = false;
 
+    // The string plays its whole gesture on the first note index.
     const bool eventIsString = eventVoice.timbre == NUUTEventTimbre::String;
-    if(eventTrigger && eventIsString)
-        stringNoteIndex = 0;
-
-    const bool blockEventTrigger
-        = eventIsString ? (stringNoteIndex >= 0) : eventTrigger;
+    const int stringNoteIndex = (eventTrigger && eventIsString) ? 0 : -1;
+    const bool blockEventTrigger = eventTrigger;
 
     // --------------------------------------------------------
     // PER-BLOCK VOICE STATE
     // Constellation lookups and voice activation are resolved
     // here instead of once per sample per voice.
     // --------------------------------------------------------
-    const float sampleRate = hw.AudioSampleRate();
-    // In Hold the chord stays still: no more notes moving up and down.
-    chordFlow.SetFrozen(holdEnabled);
-    chordFlow.Update(static_cast<float>(size) / sampleRate);
-
     bool mainGate[kNumMainVoices];
     for(int v = 0; v < kNumMainVoices; v++)
     {
@@ -627,38 +848,12 @@ void AudioCallback(AudioHandle::InputBuffer in,
         mainGate[v]      = (planet != -1) && padStates[planet];
     }
 
-    const bool chordPad = melodyActive && anyPadActive
-                          && AspectUsesChordPad(currentAspect);
-
     for(int idx = 0; idx < kNumExtraVoices; idx++)
     {
-        const int v             = idx + kNumMainVoices;
-        const int planet        = constellation.GetPlanet(v);
-        const bool isChordVoice = idx >= kChordFirstExtra
-                                  && idx <= kChordLastExtra;
+        const int v      = idx + kNumMainVoices;
+        const int planet = constellation.GetPlanet(v);
 
-        if(isChordVoice && chordPad)
-        {
-            // Chord that slowly evolves, only for the aspects chosen above.
-            const int noteIndex = idx - kChordFirstExtra;
-            if(noteIndex < melodyLength)
-            {
-                constellationVoices[idx].active = true;
-                constellationVoices[idx].targetFrequency
-                    = chordFlow.Frequency(noteIndex) * originRatio;
-
-                // Slow entry and exit, only while it acts as a chord.
-                constellationVoices[idx].attackIncrement
-                    = 1.0f / (1.5f * sampleRate);
-                constellationVoices[idx].releaseIncrement
-                    = 1.0f / (2.0f * sampleRate);
-            }
-            else
-            {
-                constellationVoices[idx].active = false;
-            }
-        }
-        else if(planet != -1 && constellation.IsExtraVoice(v)
+        if(planet != -1 && constellation.IsExtraVoice(v)
                 && anyPadActive)
         {
             // Normal constellation voice.
@@ -727,6 +922,9 @@ void AudioCallback(AudioHandle::InputBuffer in,
         lfoAmp = startAmp;
         lfoInc = (endAmp - startAmp) / static_cast<float>(size);
     }
+
+    // Strength of the event: set by the root planet (about 1 at 0.8).
+    const float eventTouchScale = eventTouch * 1.25f;
 
     // --------------------------------------------------------
     // AUDIO PROCESSING (per sample)
@@ -805,7 +1003,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
         // VOICE MIX
         // ----------------------------------------------------
         float sig = planetSig + constellationSig * kConstellationGain
-                    + eventSig * kEventGain;
+                    + eventSig * kEventGain * eventTouchScale;
 
         sig += in[0][i] * kMicGain;
 
@@ -922,10 +1120,8 @@ int main()
     const float sampleRate = hw.AudioSampleRate();
     cpuMeter.Init(sampleRate, hw.AudioBlockSize());
 
-    melodyNoteIntervalSamples
-        = static_cast<size_t>(kMelodyNoteSeconds * sampleRate);
-
     InitNUUTEventVoice(&eventVoice, sampleRate);
+    new(etherealMem) EtherealStage();
     ethereal.Init(sampleRate);
     const int reverbInitStatus = reverb.Init(sampleRate);
 
@@ -943,6 +1139,7 @@ int main()
     reverb.SetFeedback(kReverbFeedback);
     reverb.SetLpFreq(kReverbLpHz);
 
+    new(crystalsMem) Crystals();
     crystals.Init(sampleRate);
 
     for(int i = 0; i < kNumVoiceSlots; i++)
@@ -962,6 +1159,9 @@ int main()
     constellation.Init(voices);
     pads.SetOnTouch(OnPadTouch);
     pads.SetOnRelease(OnPadRelease);
+#if NUUT_MIDI
+    nuutMidi.Init();
+#endif
     hw.StartAudio(AudioCallback);
 
 #if NUUT_CPU_LOG
@@ -970,6 +1170,14 @@ int main()
     while(true)
     {
         pads.Process();
+#if NUUT_MIDI
+        static int mt = 0;
+        if(++mt >= 5)
+        {
+            mt = 0;
+            nuutMidi.Update();
+        }
+#endif
         System::Delay(4);
 #if NUUT_CPU_LOG
         if(++logCounter >= 250) // ~1 second
