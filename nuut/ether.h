@@ -40,7 +40,7 @@ constexpr float kFilterRes      = 0.45f;
 constexpr float kFilterMaxMix   = 0.55f;
 // Brightness: a gentle high shelf (no resonance) that comes in when the fader
 // goes DOWN, together with the FM.
-constexpr float kBrightMaxGain  = 0.60f;  // high-shelf amount (air) at the bottom of the fader
+constexpr float kBrightMaxGain  = 0.45f;  // high-shelf amount (air) at the bottom of the fader
 
 // Stereo echo
 constexpr float kEchoTimeL            = 0.31f;  // seconds
@@ -153,12 +153,20 @@ public:
         // a gentle high shelf. A one-pole low-pass (about 2.7 kHz) is
         // subtracted from the signal and the difference is added back: no
         // resonance, so it cannot ring or crackle, it only adds air.
-        float x = in;
+        // The air is added AFTER the comb, not inside it: inside the loop it
+        // was fed round and round (and boosted the sidebands of three notes
+        // at once), which is what crackled with two or three pads. With the
+        // fader up (no air) nothing changes.
+        float airOut = 0.0f;
         if(brightGain_ > 0.003f)
         {
             air_ += 0.30f * (in - air_);
-            x = in + (in - air_) * brightGain_;
+            // The air band stops at about 6 kHz: above that the shelf only
+            // lifted hiss (aliasing, FM sidebands) and made the top rough.
+            airBand_ += 0.55f * ((in - air_) - airBand_);
+            airOut = airBand_ * brightGain_;
         }
+        const float x = in;
 
         // Comb with a slowly modulated, fractionally interpolated delay.
         const float lfo   = combLfo_;
@@ -170,7 +178,10 @@ public:
         combLow_ += 0.03f * (combDamp_ - combLow_);
         combLine_.Write(x * 0.5f + (combDamp_ - combLow_) * combFeedback_);
 
-        return x + (d - x) * combMix_;
+        // With the fader down the comb steps back a little: the air and the FM
+        // are the colour there.
+        const float combNow = combMix_ * (1.0f - 0.8f * (brightGain_ * (1.0f / nuut_ethereal::kBrightMaxGain)));
+        return x + (d - x) * combNow + airOut;
     }
 
     // Mono in, stereo echo out (already scaled by the send amount).
@@ -246,5 +257,6 @@ private:
     float echoMod_ = 0.0f;
     float echoModStep_ = 0.0f;
     float air_ = 0.0f;
+    float airBand_ = 0.0f;
     unsigned counter_ = 0;
 };

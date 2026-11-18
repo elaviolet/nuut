@@ -193,14 +193,19 @@ CrystalStereo Crystals::Process(
         delayL += (0.29f * sampleRate - delayL) * kDelaySlew;
         delayR += (0.41f * sampleRate - delayR) * kDelaySlew;
 
-        const float wobble = (0.0025f + a * 0.006f) * sampleRate;
+        // A moving delay time bends the pitch of the echoes (slow drift). On a
+        // sawtooth, with all its harmonics, that drift is heard as a strange
+        // glide, so the movement is kept very small.
+        const float wobble = (0.0007f + a * 0.0015f) * sampleRate;
         const float tapL
             = lineL.Read(ClampDelay(delayL + modA * wobble, maxDelay));
         const float tapR
             = lineR.Read(ClampDelay(delayR + modB * wobble, maxDelay));
 
         // Loop gain stays below 0.8, so it cannot run away.
-        const float feedback = (0.30f + refraction * 0.32f + a * 0.16f) * duck;
+        // Refraction: the more of it, the more the light bounces inside the
+        // crystal: longer climbing echoes and a louder octave halo.
+        const float feedback = (0.20f + refraction * 0.42f + a * 0.16f) * duck;
         const float fbMono   = (tapL + tapR) * 0.5f;
 
         float shifterIn = input * 0.6f + fbMono * feedback;
@@ -233,8 +238,8 @@ CrystalStereo Crystals::Process(
         lineR.Write(shimmerClean);
 
         // A little immediate octave plus the two wide, drifting tails.
-        const float halo = shimmerClean * (0.20f + a * 0.10f);
-        const float tails = 0.60f + a * 0.08f;
+        const float halo = shimmerClean * (0.10f + refraction * 0.55f + a * 0.10f);
+        const float tails = 0.45f + refraction * 0.25f + a * 0.08f;
 
         result = {
             // The halo stays in the middle, the echoes land hard on one
@@ -304,13 +309,17 @@ CrystalStereo Crystals::Process(
         waveLpL2 += waveK * (waveLpL1 - waveLpL2);
 
         const float seaLevel
-            = (0.14f + a * 0.08f) * waveGate;
+            = (0.09f + a * 0.08f) * waveGate;
         const float seaL = waveLpL2 * waveGain * seaLevel * swellL;
         const float seaR = waveLpL2 * waveGain * seaLevel * swellR;
 
-        // Ping-pong at two different times.
-        delayL += (0.21f * sampleRate - delayL) * kDelaySlew;
-        delayR += (0.31f * sampleRate - delayR) * kDelaySlew;
+        // Ping-pong: the same time on both sides, so the echo bounces
+        // left, right, left, right at an even pace. Refraction bends the
+        // time: with more of it the bounces get faster (0.22 s -> 0.15 s):
+        // tight, almost a loop.
+        const float pingTime = 0.22f - 0.07f * refraction;
+        delayL += (pingTime * sampleRate - delayL) * kDelaySlew;
+        delayR += (pingTime * sampleRate - delayR) * kDelaySlew;
 
         const float swaySamples = sway * (0.005f + a * 0.008f) * sampleRate;
         const float tapL
@@ -318,12 +327,12 @@ CrystalStereo Crystals::Process(
         const float tapR
             = lineR.Read(ClampDelay(delayR - swaySamples, maxDelay));
 
-        const float feedback = (0.38f + refraction * 0.24f + a * 0.06f) * duck;
+        const float feedback = (0.54f + refraction * 0.20f + a * 0.06f) * duck;
 
         // Each bounce: the highs are absorbed (low-pass) and the lows
         // thin out (high-pass), so the echoes get airy and watery.
-        dampL += 0.55f * (tapL - dampL);
-        dampR += 0.55f * (tapR - dampR);
+        dampL += 0.50f * (tapL - dampL);   // rounded: soft bounces, not hits
+        dampR += 0.50f * (tapR - dampR);
         hpL += 0.06f * (dampL - hpL);   // thin, airy: lows are removed
         hpR += 0.06f * (dampR - hpR);
 
@@ -333,17 +342,34 @@ CrystalStereo Crystals::Process(
 
         // Soft limiter inside the loop: a loud event can never pile up in the
         // echoes and turn into a crackle (it is transparent at normal levels).
-        const float inL = inLp + (dampR - hpR) * feedback;
+        // A held note repeated by a delay is just one long wash: you cannot
+        // hear the bounce. So the sound is cut into short pings (a quick
+        // swell and a fast fade, one every two bounces) and only those enter
+        // the echoes: left, right, left, right, each one clear.
+        pingCount += 1.0f;
+        if(pingCount >= 2.0f * delayL)
+        {
+            pingCount = 0.0f;
+            pingEnv = 1.0f;
+        }
+        pingEnv *= 0.99975f;                       // fades in about 80 ms
+        pingSmooth += 0.004f * (pingEnv - pingSmooth);  // soft start (about 3 ms): not a hit
+        // The drop: every ping starts bright and closes quickly, like a drop
+        // falling into water (a low-pass that sweeps from open to dark).
+        pingLp += (0.15f + 0.22f * pingEnv * pingEnv) * (inLp * pingSmooth * 1.7f - pingLp);
+        const float pingSrc = pingLp;
+
+        const float inL = pingSrc + (dampR - hpR) * feedback;
         const float inR = (dampL - hpL) * feedback;
         lineL.Write(inL / (1.0f + 0.35f * fabsf(inL)));
         lineR.Write(inR / (1.0f + 0.35f * fabsf(inR)));
 
         // The wider Radiance is, the harder the echoes bounce to one side.
         // Real ping-pong: one echo hard left, the next hard right.
-        const float cross = 0.10f * (1.0f - width);
+        const float cross = 0.04f * (1.0f - width);
         result = {
-            input * 0.80f + tapL * 0.80f + tapR * cross + seaL,
-            input * 0.80f + tapR * 0.80f + tapL * cross + seaR
+            input * 0.80f + tapL * 0.85f + tapR * cross + seaL,
+            input * 0.80f + tapR * 0.85f + tapL * cross + seaR
         };
     }
 
@@ -372,7 +398,7 @@ CrystalStereo Crystals::Process(
             = lineR.Read(ClampDelay(delayR - modB * wobble, maxDelay));
 
         const float fbMono   = (tapL + tapR) * 0.5f;
-        const float feedback = (0.50f + radiance * 0.12f + a * 0.10f) * duck;
+        const float feedback = (0.42f + refraction * 0.14f + radiance * 0.12f + a * 0.10f) * duck;
 
         loopDamp += 0.07f * (fbMono - loopDamp);
 
@@ -387,18 +413,18 @@ CrystalStereo Crystals::Process(
         // Slow cutoff sweep, updated every 32 samples.
         if((counter & 31u) == 0u)
         {
-            darkFilter.SetFreq(300.0f + sweep * (420.0f + a * 500.0f));
-            darkFilter.SetRes(0.40f + radiance * 0.15f + a * 0.10f);
+            darkFilter.SetFreq(300.0f + sweep * (420.0f + refraction * 700.0f + a * 500.0f));
+            darkFilter.SetRes(0.35f + refraction * 0.30f + radiance * 0.15f + a * 0.10f);
         }
 
         darkFilter.Process(input + fbMono * (0.40f + radiance * 0.15f));
         const float dark = darkFilter.Low();
 
-        const float body = 0.40f + refraction * 0.25f;
+        const float body = 0.35f + refraction * 0.45f;
 
         // The dark body stays in the middle; the two echoes land hard
         // left (0.37 s) and hard right (0.53 s).
-        const float echo = 0.28f + 0.22f * width;
+        const float echo = 0.22f + 0.22f * width + refraction * 0.22f;
 
         result = {
             input * 0.60f + dark * body + tapL * echo,

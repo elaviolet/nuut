@@ -99,6 +99,13 @@ private:
     unsigned waveRngL = 12345u;
     unsigned waveRngR = 67890u;
 
+    // Acquamarina: the sound is cut into short pings before it enters the
+    // echoes (a held note would otherwise just blur into one long wash).
+    float pingCount = 0.0f;
+    float pingEnv = 0.0f;
+    float pingSmooth = 0.0f;
+    float pingLp = 0.0f;
+
     unsigned counter = 0;
     float amethystModA = 0.0f;
     float amethystModB = 0.0f;

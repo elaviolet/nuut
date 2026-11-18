@@ -49,7 +49,7 @@ inline float NUUTEventFoldFrequency(float f, float lo, float hi)
 // that move step by step (like a little tune, not a chord): the melody
 // starts and ends on notes of the chord, and in between it walks through
 // a bell scale built on the chord, up and down over two octaves, with a
-// gentle swell in strength. The bells ring into each other, so it flows.
+// gentle swell in strength. The bells overlap.
 // (Without a chord set, only the single triggering note is played.)
 // ============================================================
 
@@ -178,7 +178,7 @@ inline float ProcessNUUTEventBell(
         else
         {
             // Bell scale: a major-ish scale plus the notes of the chord.
-            // Every shower picks its own register: sometimes low bells,
+            // Every phrase picks its own register: sometimes low bells,
             // sometimes high ones. The scale starts anywhere from about
             // 250 Hz (low) to about 1500 Hz (high).
             const float lowEdge =
@@ -390,11 +390,11 @@ inline float ProcessNUUTEventBell(
 
 // ============================================================
 // NUUT EVENT GONG
-// One deep, cavernous strike (a big tam-tam). The note is taken down
-// into the low register, the first two partials are slightly detuned so
-// the boom slowly "waves", and the middle and high partials bloom in
-// after the hit, like the swell of a real gong. It is all pure tones:
-// there is no noise in it. It rings for many seconds.
+// A large gong (tam-tam). The note is folded into the low register and the
+// first two partials are slightly detuned, which gives a slow beating. The
+// middle and high partials swell in after the strike. All partials are
+// pure tones: there is no noise in the gong. It rings for several seconds.
+// One trigger plays two or three strokes, each with its own swell.
 // ============================================================
 
 struct NUUTEventGong
@@ -440,19 +440,19 @@ struct NUUTEventGong
     bool modeOn[MODE_COUNT] = {};
     int bloomLeft = 0;
 
-    // Crash of noise at the strike.
+    // Noise burst at the strike (not used: the gong has no noise).
     float crashEnv = 0.0f;
     float crashDecay = 0.999f;
     float crashLp = 0.0f;
 
     std::uint32_t rng = 31415u;
 
-    // Strength of the next strike (a repeated hit is softer, so the boom
-    // does not pile up on the ringing tail).
+    // Strength of the next strike (a repeated hit is softer, so the low
+    // partials do not pile up on the ringing tail).
     float strikeGain = 1.0f;
 
-    // A gong gesture is a few firm strokes (like the drum, but slower):
-    // the first one at the trigger, the others from this little sequencer.
+    // A gong gesture is two or three strokes: the first one at the trigger,
+    // the others from this small sequencer.
     int seqLeft = 0;
     int seqIndex = 0;
     int seqTimer = 0;
@@ -510,7 +510,7 @@ inline float ProcessNUUTEventGong(
     static constexpr float RATIOS[8] =
         {1.000f, 1.006f, 1.52f, 2.07f, 2.76f, 3.62f, 4.74f, 6.10f};
 
-    // Seconds: the low boom rings very long, the highs fade sooner.
+    // Seconds: the lowest partials ring longest, the highest fade sooner.
     static constexpr float DECAY[8] =
         {8.0f, 7.0f, 6.0f, 5.5f, 4.5f, 3.8f, 3.0f, 2.2f};
 
@@ -527,12 +527,12 @@ inline float ProcessNUUTEventGong(
 
     constexpr float BLOOM_DRIVE = 8.0e-6f;
 
-    // Darker than the first version, but the middle partials stay: they are
-    // what makes the gong heard on small speakers and headphones.
+    // Level of each partial. The middle partials carry the gong on small
+    // speakers and headphones.
     static constexpr float WEIGHT[8] =
         {0.70f, 0.62f, 0.85f, 0.90f, 0.85f, 0.72f, 0.55f, 0.40f};
 
-    // Overall level: a strike that really is heard.
+    // Overall level.
     constexpr float GONG_LEVEL = 13.0f;
     constexpr float TWO_PI = 6.28318530718f;
     const float sr = gong->sampleRate;
@@ -565,8 +565,7 @@ inline float ProcessNUUTEventGong(
 
     if(trigger)
     {
-        // The note is taken into 200 - 400 Hz: low and deep, but still heard on
-        // small speakers and headphones.
+        // The note is folded into 260 - 520 Hz.
         const float f0 = NUUTEventFoldFrequency(frequency, 260.0f, 520.0f);
 
         for(std::size_t i = 0;
@@ -591,7 +590,7 @@ inline float ProcessNUUTEventGong(
             gong->modeOn[i] = true;
         }
 
-        // 3 strokes (2 now and then).
+        // Three strokes, sometimes two.
         gong->rng = gong->rng * 1664525u + 1013904223u;
         gong->seqLeft = (gong->rng >> 24) < 64 ? 1 : 2;
         gong->seqIndex = 0;
@@ -671,7 +670,7 @@ inline float ProcessNUUTEventGong(
     if(blooming)
         --gong->bloomLeft;
 
-    // Deep body.
+    // Low sine body.
     float body = 0.0f;
     if(gong->bodyEnv > 1.0e-4f)
     {
@@ -683,7 +682,7 @@ inline float ProcessNUUTEventGong(
         gong->bodyEnv *= gong->bodyDecay;
     }
 
-    // (no noise in the gong: the strike is purely tonal)
+    // The gong has no noise: the strike is purely tonal.
     float crack = 0.0f;
     if(gong->crashEnv > 1.0e-3f)
     {
@@ -701,12 +700,12 @@ inline float ProcessNUUTEventGong(
 
 // ============================================================
 // NUUT EVENT TRIBAL DRUM
-// A hand-drum phrase (djembe / frame-drum style). One trigger plays a
-// few deep strokes (2 or 3, a little different each time):
-//   DUM : deep boom with a big pitch drop
-//   KA  : middle tone, softer
-//   TAK : high slap, short and sharp
-// Each stroke is a pitch-dropping skin body, a noise slap and a modal
+// A hand-drum phrase (djembe / frame-drum style). One trigger plays two or
+// three strokes, a little different each time. Three stroke types:
+//   low    : deep, with a large pitch drop
+//   middle : middle tone, softer
+//   high   : short and bright
+// Each stroke is a pitch-dropping skin body, a noise burst and a modal
 // skin with circular-membrane overtones. The drum is tuned low (the
 // triggering note is folded down into 70-150 Hz).
 // ============================================================
@@ -803,7 +802,7 @@ inline void InitNUUTEventTribalDrum(
 }
 
 
-// One stroke: type 0 = DUM, 1 = KA, 2 = TAK.
+// One stroke: type 0 = low, 1 = middle, 2 = high.
 inline void NUUTEventTribalDrumStroke(
     NUUTEventTribalDrum* d,
     int type,
@@ -820,7 +819,7 @@ inline void NUUTEventTribalDrumStroke(
     static constexpr float SKIN_TAU[9] =
         {1.00f, 0.75f, 0.70f, 0.55f, 0.45f, 0.40f, 1.30f, 1.00f, 0.80f};
 
-    //                                    DUM    KA     TAK
+    //                                    low    mid    high
     static constexpr float PITCH_MUL[3] = {1.00f, 1.50f, 2.00f};
     static constexpr float BODY_TAU[3]  = {0.15f, 0.18f, 0.10f};
     static constexpr float SKIN_BASE[3] = {0.10f, 0.15f, 0.09f};
@@ -894,8 +893,8 @@ inline float ProcessNUUTEventTribalDrum(
             return static_cast<float>(drum->rng >> 8) / 16777216.0f;
         };
 
-        // "Tum tum" or at most "tum tum tum": a few deep, short strokes of
-        // the same drum, close together, each a little different.
+        // Two or three short low strokes of the same drum, close together,
+        // each a little different.
         drum->phraseCount = rand01() < 0.80f ? 2 : 3;
         drum->phraseStep = 0;
         drum->samplesToNext = 0;
@@ -1352,7 +1351,9 @@ inline float ProcessNUUTEventFlute(
 
 struct NUUTEventString
 {
-    static constexpr std::size_t MODE_COUNT = 10;
+    // 7 partials: the three highest ones (weights 0.10, 0.07, 0.05) were
+    // almost inaudible and cost a third of the string's CPU.
+    static constexpr std::size_t MODE_COUNT = 7;
     static constexpr std::size_t NOTE_COUNT = 6; // strings that can ring together
 
     struct Resonator
@@ -1516,7 +1517,7 @@ inline float ProcessNUUTEventString(
             // different every time, so the strings never sound the same:
             //   - a quick strum of the three notes (about a third of the time)
             //   - a slow, harp-like spread of the notes
-            //   - a short flowing phrase of plucks, like the opening of a raga
+            //   - a short phrase of plucks
             // (The later notes that the main asks for are not needed.)
             if(noteIndex == 0)
             {
@@ -1839,7 +1840,7 @@ inline void SetNUUTEventTimbre(
         voice->string.direct = false;
 
         // The instrument that was playing is not cut: it rings out (a gong
-        // for 6 s, the others for 1.5 s) while the new one starts.
+        // for 4 s, the others for 1 s) while the new one starts.
         const NUUTEventTimbre old = voice->timbre;
         if(old != NUUTEventTimbre::CrystalBell) StopNUUTEventBell(&voice->bell);
         if(old != NUUTEventTimbre::Gong) StopNUUTEventGong(&voice->gong);
@@ -1848,7 +1849,7 @@ inline void SetNUUTEventTimbre(
         if(old != NUUTEventTimbre::String) StopNUUTEventString(&voice->string);
         voice->prevTimbre = old;
         voice->prevLeft = static_cast<int>(
-            (old == NUUTEventTimbre::Gong ? 6.0f : 1.5f) * voice->sampleRate);
+            (old == NUUTEventTimbre::Gong ? 4.0f : 1.0f) * voice->sampleRate);
     }
 
     voice->timbre = timbre;
@@ -2017,7 +2018,7 @@ inline float ProcessNUUTEventVoiceCurrent(
             voice->bell.inversion = voice->inversion;
 #if NUUT_FLUTE_PHRASE
             // Half of the time the bells play a melody of single notes with
-            // long and short rings; the other half the old shower of notes.
+            // long and short rings; the other half the earlier burst of notes.
             if(trigger && voice->hasChord)
             {
                 voice->phRng = voice->phRng * 1664525u + 1013904223u;

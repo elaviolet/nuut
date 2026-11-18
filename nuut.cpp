@@ -36,6 +36,12 @@ using namespace daisysp;
 // Set to 0 to disable the once-per-second CPU load print over USB serial.
 #define NUUT_CPU_LOG 0   // must stay 0 while NUUT_MIDI is 1 (both use the USB port)
 
+// With one pad pressed, the constellation adds two companion planets (silent
+// as voices). They can still form aspects with the pressed planet, so a sky
+// event can play with only one pad. 1 = only the planets you really press can
+// form an aspect (a single pad never gives an event); 0 = as before.
+#define NUUT_ASPECTS_PRESSED_ONLY 0
+
 // Per-section cost, cycles per sample (budget about 10000). Only active with
 // NUUT_CPU_LOG 1. Sections: events, main voices, extra voices, comb/peak,
 // crystals, echo, reverb.
@@ -132,9 +138,15 @@ constexpr PlanetPersona kPersona[10] = {
 // drum, flute, gong).
 constexpr float kGestureSeconds[5] = {3.5f, 4.0f, 1.6f, 5.0f, 8.0f};
 
-constexpr float kConstellationGain = 1.10f;
+constexpr float kConstellationGain = 2.20f;   // Celestia voices: twice as present
 constexpr float kEventGain         = 0.008f;
 constexpr float kMicGain           = 0.25f;
+// Noise gate on the audio input: the input noise floor (a faint hiss) would go
+// through the comb, the echo, the crystals and the reverb, which raise it.
+// The input opens above kMicGateOpen (peak level, 0..1) and closes below
+// kMicGateClose. Set kMicGateOpen to 0 to switch the gate off.
+constexpr float kMicGateOpen       = 0.004f;
+constexpr float kMicGateClose      = 0.002f;
 
 // Reverb
 constexpr float kReverbFeedback    = 0.93f;
@@ -478,7 +490,11 @@ void AudioCallback(AudioHandle::InputBuffer in,
     for(int v = 0; v < kNumMainVoices; v++)
     {
         const int p = constellation.GetPlanet(v);
+#if NUUT_ASPECTS_PRESSED_ONLY
+        if(p >= 0 && p < 10 && padStates[p])
+#else
         if(p >= 0 && p < 10)
+#endif
             aspectMask |= 1u << p;
     }
 
@@ -544,12 +560,12 @@ void AudioCallback(AudioHandle::InputBuffer in,
     // instrument, voicing. While it lasts, the melody layer plays the
     // instrument again and again, at the pace of the root planet.
     //
-    // Two protections against a messy overlap of events:
+    // Two protections against overlapping events:
     //  - an aspect that drops out for less than half a second (the sky
     //    jitters at the edge of the orb) is not a new event;
-    //  - a new event waits until the last one has had time to sound
-    //    (0.6 s; 0.25 s for the drum, so it can follow the planets rhythmically;
-    //    3 s after a gong; a second gong waits 10 s after the last one).
+    //  - a new event waits until the last one has had time to sound:
+    //    0.6 s (1.5 s after a gong); 0.25 s for the drum and the gong; and a
+    //    gong keeps at least 1.5 s from the previous gong.
     // --------------------------------------------------------
     static float noAspectTime  = 0.0f;
     static float sinceEvent    = 99.0f;
@@ -588,11 +604,10 @@ void AudioCallback(AudioHandle::InputBuffer in,
     if(startDeferred && melodyActive && anyPadActive)
     {
         const AspectProfile* sp = GetAspectProfile(melodyLastAspect);
-        // A gong waits for the last gong to ring out; any other event only
-        // waits a moment (3 s after a gong, so its tail is not cut at once).
-        // The gong answers at once, like the drum (it only keeps a short
-        // distance from the last gong, so a planet at the edge of the orb
-        // cannot strike it again and again).
+        // The drum and the gong start quickly; the other events wait a little
+        // longer (and longer still after a gong, so its tail is not cut).
+        // The gong keeps a short distance from the previous gong, so a planet
+        // at the edge of the orb cannot strike it again and again.
         const bool quick = sp->timbre == NUUTEventTimbre::TribalDrum || sp->singleNote;
         const float need = quick ? 0.25f : (lastEventWasGong ? 1.5f : 0.6f);
         if(sinceEvent >= need && (!sp->singleNote || sinceGong >= 1.5f))
@@ -637,9 +652,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
     // Melody layer: the same event is played again when the timer runs out.
     // The root planet sets the pace, the melody amount (Shift + Transit
     // fader) sets how often.
-    // The gong (single-note event) rings once per aspect: it does not repeat.
-    // The gong repeats at most twice, far apart (a gong that keeps sounding
-    // is a mess); the other instruments go on for as long as the aspect lasts.
+    // The gong repeats its gesture once, after 8 s; the other instruments go
+    // on for as long as the aspect lasts.
     const bool lastIsGong = melodyActive && GetAspectProfile(melodyLastAspect)->singleNote;
     if(melodyActive && !startDeferred && anyPadActive && melodyFader > 0.03f
        && (!lastIsGong || gongRepeats < 1))
@@ -655,11 +669,11 @@ void AudioCallback(AudioHandle::InputBuffer in,
             const float gap = pa.period * pace / (0.35f + 1.4f * melodyFader)
                               * (1.0f + pa.irregular * (r - 0.5f) * 1.4f);
             melodyTimer = kGestureSeconds[melodyLastAspect] + gap;
-            eventVoice.repeatGain = 0.5f;   // repeats are softer (gong)
+            eventVoice.repeatGain = 0.5f;   // repeats are softer
             if(lastIsGong)
             {
                 ++gongRepeats;
-                // Steady tolls: same distance, same weight, a little softer.
+                // The gong repeats once, at a fixed distance and a fixed level.
                 melodyTimer = 8.0f;
                 eventVoice.repeatGain = 0.6f;
             }
@@ -764,7 +778,23 @@ void AudioCallback(AudioHandle::InputBuffer in,
     // FM + brightness amount: starts gently a little below the top of the
     // fader (at 65%) and rises smoothly (smoothstep) to 1 at the very bottom.
     const float bLin = fminf(1.0f, fmaxf(0.0f, (0.65f - alchemySmoothed) / 0.65f));
-    const float Bright = bLin * bLin * (3.0f - 2.0f * bLin);
+    const float brightRaw = bLin * bLin * (3.0f - 2.0f * bLin);
+    // The high shelf (air) adds partials that do not match
+    // between different notes: with two or three pads together they rub and
+    // rasp. So with more pads the air is lowered a little (1 pad: all of it).
+    int pressedCount = 0;
+    for(int i = 0; i < kNumPads; i++)
+        if(padStates[i])
+            ++pressedCount;
+    const float brightTarget = pressedCount <= 1 ? 1.0f
+                               : (pressedCount == 2 ? 0.90f : 0.80f);
+    static float brightScale = 1.0f;
+    brightScale += 0.004f * (brightTarget - brightScale);   // slow: no jump
+    // (The FM stays: it is the brightness of the fader-down sound. The rasp
+    // came from the comb, which no longer receives the air.)
+    const float fmScale = 1.0f;
+    const float Bright   = brightRaw * brightScale;
+    const float BrightFm = brightRaw * fmScale;
     ethereal.SetBrightness(Bright);
 
     const float crystalRefraction = knobs.s34().Process();
@@ -848,25 +878,51 @@ void AudioCallback(AudioHandle::InputBuffer in,
         mainGate[v]      = (planet != -1) && padStates[planet];
     }
 
+    // Entry swell: a Celestia voice that has just come in is louder for
+    // about a second, so its arrival is heard, then settles to its level.
+    static float celestiaEntry[kNumExtraVoices] = {};
+    static bool celestiaWasOn[kNumExtraVoices]  = {};
+    float celestiaGain[kNumExtraVoices];
+
     for(int idx = 0; idx < kNumExtraVoices; idx++)
     {
         const int v      = idx + kNumMainVoices;
         const int planet = constellation.GetPlanet(v);
 
-        if(planet != -1 && constellation.IsExtraVoice(v)
-                && anyPadActive)
+        const bool nowOn = planet != -1 && constellation.IsExtraVoice(v)
+                           && anyPadActive;
+        if(nowOn && !celestiaWasOn[idx])
+            celestiaEntry[idx] = 1.0f;
+        celestiaWasOn[idx] = nowOn;
+        celestiaEntry[idx] = fmaxf(0.0f, celestiaEntry[idx] - blockSeconds / 1.2f);
+        celestiaGain[idx]  = 1.0f + 1.6f * celestiaEntry[idx] * celestiaEntry[idx];
+
+        if(nowOn)
         {
             // Normal constellation voice.
             constellationVoices[idx].attackIncrement
-                = 1.0f / (0.03f * sampleRate);
+                = 1.0f / (0.10f * sampleRate);
             constellationVoices[idx].releaseIncrement
                 = 1.0f / (0.30f * sampleRate);
             constellationVoices[idx].active = true;
             // Celestia voices follow the same chord as the main voices.
+            // The snap onto the chord only changes with the zone, the root or
+            // the planet: it is not recomputed in every block (logs, loops).
+            static int   snapZone[kNumExtraVoices]   = {-1, -1, -1, -1, -1, -1, -1};
+            static float snapRoot[kNumExtraVoices]   = {};
+            static int   snapPlanet[kNumExtraVoices] = {-1, -1, -1, -1, -1, -1, -1};
+            static float snapRatio[kNumExtraVoices]  = {};
+            if(snapZone[idx] != kosmosZone || snapRoot[idx] != kosmosRootHz
+               || snapPlanet[idx] != planet)
+            {
+                snapZone[idx]   = kosmosZone;
+                snapRoot[idx]   = kosmosRootHz;
+                snapPlanet[idx] = planet;
+                snapRatio[idx]  = KosmosSnapRatio(kosmosRootHz, planets[planet].frequency,
+                                                  kosmosZone, -1, nullptr);
+            }
             constellationVoices[idx].targetFrequency
-                = planets[planet].frequency * originRatio
-                  * KosmosSnapRatio(kosmosRootHz, planets[planet].frequency,
-                                    kosmosZone, -1, nullptr);
+                = planets[planet].frequency * originRatio * snapRatio[idx];
         }
         else
         {
@@ -929,6 +985,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
     // --------------------------------------------------------
     // AUDIO PROCESSING (per sample)
     // --------------------------------------------------------
+    static float micPeak = 0.0f;
+    static float micGate = 0.0f;
     const float refFrequency = voices[0].frequency;
     (void)refFrequency; 
 
@@ -983,7 +1041,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
                                       voices[0].frequency,
                                       nullptr,
                                       waveMorph,
-                                      Bright);
+                                      BrightFm);
         }
 
         PROF_END(1);
@@ -992,7 +1050,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
         float constellationSig = 0.0f;
         for(int idx = 0; idx < kNumExtraVoices; idx++)
         {
-            constellationSig += ProcessPlanetConstellationVoice(
+            constellationSig += celestiaGain[idx] * ProcessPlanetConstellationVoice(
                 &constellationVoices[idx],
                 constellationVoices[idx].targetFrequency);
         }
@@ -1005,7 +1063,17 @@ void AudioCallback(AudioHandle::InputBuffer in,
         float sig = planetSig + constellationSig * kConstellationGain
                     + eventSig * kEventGain * eventTouchScale;
 
-        sig += in[0][i] * kMicGain;
+        float mic = in[0][i];
+        if(kMicGateOpen > 0.0f)
+        {
+            const float level = fabsf(mic);
+            micPeak += (level > micPeak ? 0.02f : 0.0003f) * (level - micPeak);
+            const float target = micPeak > kMicGateOpen ? 1.0f
+                                 : (micPeak < kMicGateClose ? 0.0f : micGate);
+            micGate += (target > micGate ? 0.002f : 0.0004f) * (target - micGate);
+            mic *= micGate;
+        }
+        sig += mic * kMicGain;
 
         sig *= lfoAmp;
         lfoAmp += lfoInc;
@@ -1176,6 +1244,15 @@ int main()
         {
             mt = 0;
             nuutMidi.Update();
+        }
+        // Audio CPU load for the web page (average and peak, twice a second).
+        static int cpuTick = 0;
+        if(++cpuTick >= 125)
+        {
+            cpuTick = 0;
+            g_nuutMidiState.cpuAvg = cpuMeter.GetAvgCpuLoad();
+            g_nuutMidiState.cpuMax = cpuMeter.GetMaxCpuLoad();
+            cpuMeter.Reset();
         }
 #endif
         System::Delay(4);

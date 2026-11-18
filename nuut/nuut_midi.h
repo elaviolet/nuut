@@ -18,6 +18,8 @@ struct NuutMidiState
     volatile float ctrl[8]      = {0, 0, 0, 0, 0, 0, 0, 0}; // CC30..CC37
     volatile int   crystal      = 1;  // 0 obsidian, 1 amethyst, 2 aquamarine
     volatile int   transitMode  = 1;  // 0 linger, 1 off, 2 on
+    volatile float cpuAvg       = 0;  // audio CPU load 0..1 (CC51)
+    volatile float cpuMax       = 0;  // peak since the last reading (CC50)
     volatile int   aspect       = 0;  // 0 none, 1..5
     volatile int   aspectA      = 0;
     volatile int   aspectB      = 0;
@@ -79,6 +81,12 @@ class NuutMidi
         }
         const uint8_t cs = g_nuutMidiState.crystal == 0 ? 0 : g_nuutMidiState.crystal == 1 ? 64 : 127;
         if(cs != lastCrystal_) { lastCrystal_ = cs; Send(0xB0, 40, cs); }
+        {
+            const uint8_t ca = ToCc(g_nuutMidiState.cpuAvg);
+            const uint8_t cm = ToCc(g_nuutMidiState.cpuMax);
+            if(ca != lastCpuAvg_) { lastCpuAvg_ = ca; Send(0xB0, 51, ca); }
+            if(cm != lastCpuMax_) { lastCpuMax_ = cm; Send(0xB0, 50, cm); }
+        }
         const uint8_t tm = g_nuutMidiState.transitMode == 0 ? 0 : g_nuutMidiState.transitMode == 1 ? 64 : 127;
         if(tm != lastTm_) { lastTm_ = tm; Send(0xB0, 41, tm); }
         const int asp = g_nuutMidiState.aspect, a = g_nuutMidiState.aspectA, b = g_nuutMidiState.aspectB;
@@ -104,6 +112,7 @@ class NuutMidi
     uint8_t lastCtrl_[8] = {255, 255, 255, 255, 255, 255, 255, 255};
     uint8_t lastCrystal_ = 255, lastTm_ = 255, lastPr_ = 0, lastMelody_ = 255, lastMorph_ = 255;
     int lastPos_ = -1;
+    uint8_t lastCpuAvg_ = 255, lastCpuMax_ = 255;
     unsigned heldMask_ = 0;
     int refresh_ = 0;
     int lastAsp_ = -1, lastA_ = -1, lastB_ = -1;
