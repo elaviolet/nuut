@@ -4,8 +4,8 @@ NUUT is an experimental polyphonic generative synthesizer for the Synthux Academ
 
 Inspired by celestial harmony, planetary motion, astrological aspects and crystals.
 
-- Web interface (follows your Touch live): <http://ametistawaves.com/nuut>
-- Manual (PDF): <http://ametistawaves.com/nuut/manual.pdf>
+- Web interface (follows your Touch live): <https://ametistawaves.com/nuut/>
+- Manual (PDF): <https://ametistawaves.com/nuut/Nuut-Manual-v0.2.pdf>
 
 ## Controls
 
@@ -74,16 +74,25 @@ git clone --recurse-submodules https://github.com/elaviolet/nuut.git
 make clean && make
 ```
 
-NUUT uses the **Daisy bootloader**: the program is stored in the QSPI flash and runs from RAM. Install the bootloader once, then flash NUUT.
+NUUT is larger than the 128 KB internal flash of the Daisy Seed, so it is stored in the external QSPI flash and started by the **Daisy bootloader**. This is the standard Electro-Smith bootloader, the same one used by any large Daisy program. Once it is installed, updating NUUT only means loading a new `nuut.bin`. If you load a different firmware in between, install the bootloader again before returning to NUUT.
 
-1. Install the bootloader (once): put the Daisy Seed in DFU mode (hold BOOT, press RESET, release both) and run `make program-boot`. The message *Error during download get_status* and *make: Error 74* at the end are normal.
-2. Flash NUUT: connect the Daisy Seed by USB **without** holding BOOT. While the LED pulses (about two seconds after power-up), press BOOT once. Check that the DFU device shows *QSPI Flash*, then run `make program-dfu`.
+### Install the bootloader
 
-The binary is `build/nuut.bin`.
+Put the Daisy Seed in DFU mode (hold BOOT, press RESET, release both) and run, from the project folder:
+
+```
+make program-boot
+```
+
+The messages *Error during download get_status* and *make: Error 74* at the end are normal.
+
+### Load NUUT
+
+Connect the Daisy Seed by USB **without** holding BOOT. While the LED pulses (about two seconds after power-up), press BOOT once. Check that the DFU device shows *QSPI Flash*, then either build and run `make program-dfu`, or load the prebuilt file (see Download below). The binary you build is `build/nuut.bin`.
 
 ## Download
 
-Prebuilt test firmware: [nuut.bin (v0.2)](https://github.com/elaviolet/nuut/releases/download/v0.2/nuut.bin). All versions are listed under [Releases](https://github.com/elaviolet/nuut/releases).
+Prebuilt beta firmware: [nuut.bin (v0.2)](https://github.com/elaviolet/nuut/releases/download/v0.2/nuut.bin). All versions are listed under [Releases](https://github.com/elaviolet/nuut/releases).
 
 The prebuilt file is for the bootloader build: install the bootloader first (see above), then load it with `dfu-util`:
 
@@ -93,7 +102,7 @@ dfu-util -a 0 -s 0x90040000:leave -D nuut.bin -d ,0483:df11
 
 ## Web interface and MIDI
 
-Open <http://ametistawaves.com/nuut> in Chrome or Edge (Web MIDI is needed) and connect the Touch by USB: the page follows the pads, faders, switches, sky position and events. The MIDI box shows the audio CPU load of the Touch. Without the Touch, the page plays on its own in the browser.
+Open <https://ametistawaves.com/nuut/> in Chrome or Edge (Web MIDI is needed) and connect the Touch by USB: the page follows the pads, faders, switches, sky position and events. The MIDI box shows the audio CPU load of the Touch. Without the Touch, the page plays on its own in the browser.
 
 The Touch sends USB MIDI on channel 1 (state) and channel 2 (sky events):
 
