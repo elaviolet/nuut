@@ -44,9 +44,9 @@ class NuutMidi
         if(pad >= 0 && pad < 16) { if(on) heldMask_ |= (1u << pad); else heldMask_ &= ~(1u << pad); }
         Send(0x90, 36 + pad, on ? 100 : 0);
     }
-    void Shift(bool on) { Send(0x90, 46, on ? 100 : 0); }
-    void Hold(bool on) { Send(0x90, 47, on ? 100 : 0); }
-    void Freeze(bool on) { Send(0x90, 48, on ? 100 : 0); }
+    void Shift(bool on) { shift_ = on; Send(0x90, 46, on ? 100 : 0); }
+    void Hold(bool on) { hold_ = on; Send(0x90, 47, on ? 100 : 0); }
+    void Freeze(bool on) { freeze_ = on; Send(0x90, 48, on ? 100 : 0); }
     // call every ~20 ms from the main loop: only changed values are sent
     void Update()
     {
@@ -58,6 +58,23 @@ class NuutMidi
             lastAsp_ = -1;
             for(int p = 0; p < 10; p++)
                 if(!(heldMask_ & (1u << p))) Send(0x90, 36 + p, 0);
+        }
+        // Full state refresh (~1.4 s): the controls are otherwise sent only when
+        // they change, so a page that connects later would not know the current
+        // position of the switches and faders. Skipped while Shift is held,
+        // because the page maps Transit and Alchemy to Melody and Morph then.
+        if(++syncTick_ >= 70)
+        {
+            syncTick_ = 0;
+            if(!shift_)
+            {
+                for(int i = 0; i < 8; i++) lastCtrl_[i] = 255;
+                lastCrystal_ = 255; lastTm_ = 255; lastMelody_ = 255; lastMorph_ = 255;
+                lastPos_ = -1;
+                Send(0x90, 46, 0);
+                Send(0x90, 47, hold_ ? 100 : 0);
+                Send(0x90, 48, freeze_ ? 100 : 0);
+            }
         }
         for(int i = 0; i < 8; i++)
         {
@@ -115,5 +132,7 @@ class NuutMidi
     uint8_t lastCpuAvg_ = 255, lastCpuMax_ = 255;
     unsigned heldMask_ = 0;
     int refresh_ = 0;
+    int syncTick_ = 0;
+    bool shift_ = false, hold_ = false, freeze_ = false;
     int lastAsp_ = -1, lastA_ = -1, lastB_ = -1;
 };
