@@ -26,7 +26,8 @@ struct NuutMidiState
     volatile float proximity    = 0.f;
     volatile float melody       = 0.4f; // CC38 (Shift + Transit fader)
     volatile float morph        = 1.f;  // CC39 (Shift + Alchemy fader)
-    volatile float transitPos   = 0.f;  // 0..1 position of the sky: CC42 (MSB) + CC74 (LSB)
+    volatile float transitPos   = 0.f;  // 0..1 position inside the cycle: CC42 (MSB) + CC74 (LSB)
+    volatile int   transitCycle = 0;    // whole cycle number 0..127: CC43
 };
 extern NuutMidiState g_nuutMidiState;
 
@@ -70,7 +71,7 @@ class NuutMidi
             {
                 for(int i = 0; i < 8; i++) lastCtrl_[i] = 255;
                 lastCrystal_ = 255; lastTm_ = 255; lastMelody_ = 255; lastMorph_ = 255;
-                lastPos_ = -1;
+                lastPos_ = -1; lastCycle_ = 255;
                 Send(0x90, 46, 0);
                 Send(0x90, 47, hold_ ? 100 : 0);
                 Send(0x90, 48, freeze_ ? 100 : 0);
@@ -86,6 +87,8 @@ class NuutMidi
             if(m != lastMelody_) { lastMelody_ = m; Send(0xB0, 38, m); }
             const uint8_t mo = ToCc(g_nuutMidiState.morph);
             if(mo != lastMorph_) { lastMorph_ = mo; Send(0xB0, 39, mo); }
+            const uint8_t cyc = (uint8_t)(g_nuutMidiState.transitCycle & 0x7F);
+            if(cyc != lastCycle_) { lastCycle_ = cyc; Send(0xB0, 43, cyc); }
             float tp = g_nuutMidiState.transitPos;
             tp = tp < 0.f ? 0.f : tp > 0.99993f ? 0.99993f : tp;
             const int t14 = (int)(tp * 16384.f);
@@ -129,6 +132,7 @@ class NuutMidi
     uint8_t lastCtrl_[8] = {255, 255, 255, 255, 255, 255, 255, 255};
     uint8_t lastCrystal_ = 255, lastTm_ = 255, lastPr_ = 0, lastMelody_ = 255, lastMorph_ = 255;
     int lastPos_ = -1;
+    uint8_t lastCycle_ = 255;
     uint8_t lastCpuAvg_ = 255, lastCpuMax_ = 255;
     unsigned heldMask_ = 0;
     int refresh_ = 0;

@@ -51,21 +51,33 @@ public:
     // Each planet moves according to its individual speed.
     // --------------------------------------------------------
 
-    void SetPosition(float value)
+    void SetPosition(double value)
     {
-        float transit = value * 360.0f;
+        constexpr float kDeg = 0.01745329252f;
+        const double turn = value * 360.0;                    // time in degrees of the Earth's orbit (one cycle = one year)
+        const float earth = (float)std::fmod(earthStartDeg + turn, 360.0) * kDeg;
 
         for(int i = 0; i < 10; i++)
         {
-            planets[i].position =
-                initialPlanetPositions[i] + transit * planets[i].speed;
+            float pos;
 
-            // Keep the angular position within 0–360 degrees.
-            while(planets[i].position >= 360.0f)
-                planets[i].position -= 360.0f;
+            if(i == 2)           // Sun: opposite to the Earth's heliocentric position
+                pos = (float)std::fmod(earthStartDeg + 180.0 + turn, 360.0);
+            else if(i == 9)      // Moon: turns around the Earth
+                pos = (float)std::fmod(initialPlanetPositions[i] + turn * planets[i].speed, 360.0);
+            else                 // planet: direction seen from the Earth
+            {
+                // Reduced in double precision: with a long time the angle gets large.
+                const float a = (float)std::fmod(orbits[i].startDeg + turn * planets[i].speed, 360.0) * kDeg;
+                pos = atan2f(orbits[i].radius * sinf(a) - sinf(earth),
+                             orbits[i].radius * cosf(a) - cosf(earth)) / kDeg;
+            }
 
-            while(planets[i].position < 0.0f)
-                planets[i].position += 360.0f;
+            // Keep the angular position within 0-360 degrees.
+            pos = fmodf(pos, 360.0f);
+            if(pos < 0.0f)
+                pos += 360.0f;
+            planets[i].position = pos;
         }
     }
 

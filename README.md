@@ -27,7 +27,7 @@ Inspired by celestial harmony, planetary motion, astrological aspects and crysta
 
 <h3>Faders</h3>
 
-- S36 (left) - **Transit** | Controls planetary orbital movement through the 360° system, enabling astrological events (aspects) that trigger instruments and chords. In Off mode it moves the sky; in On and Linger it sets the speed
+- S36 (left) - **Transit** | Controls the movement of the planets through the 360° sky, enabling astrological events (aspects) that trigger instruments and chords. The sky is seen from the Earth, so planets also slow down, stop and move backwards (retrograde), and it starts from the real sky at the spring equinox of 1985. Time keeps moving forward and never restarts at each cycle. In Off mode the fader moves the sky; in On and Linger it sets the speed
 - S37 (right) - **Alchemy** | Shapes the tonal character and timbral response of the voices: up, the comb, echo and resonance of the Alchemy stage; down, brightness (FM and air)
 
 <h3>Pads</h3>
@@ -92,7 +92,7 @@ Connect the Daisy Seed by USB **without** holding BOOT. While the LED pulses (ab
 
 ## Download
 
-Prebuilt beta firmware: [nuut.bin (v0.2)](https://github.com/elaviolet/nuut/releases/download/v0.2/nuut.bin). All versions are listed under [Releases](https://github.com/elaviolet/nuut/releases).
+Prebuilt beta firmware: [nuut.bin (v0.3)](https://github.com/elaviolet/nuut/releases/download/v0.3/nuut.bin). All versions are listed under [Releases](https://github.com/elaviolet/nuut/releases).
 
 The prebuilt file is for the bootloader build: install the bootloader first (see above), then load it with `dfu-util`:
 
@@ -114,7 +114,8 @@ The Touch sends USB MIDI on channel 1 (state) and channel 2 (sky events):
 | CC 38 / 39 | Melody amount / Wave Morph |
 | CC 40 | Crystal (0 Obsidian, 64 Amethyst, 127 Aquamarine) |
 | CC 41 | Transit mode (0 Linger, 64 Off, 127 On) |
-| CC 42 + 74 | Position of the sky (14 bit: MSB and LSB) |
+| CC 42 + 74 | Position of the sky inside the cycle (14 bit: MSB and LSB) |
+| CC 43 | Number of the whole cycle (0-127), to be used with CC 42 + 74 |
 | CC 50 / 51 | Audio CPU peak / average |
 | Channel 2, CC 20-23 | Aspect (0 none, 1-5), planet A, planet B, proximity |
 | Channel 2, notes | Notes struck by the event instrument |

@@ -230,7 +230,11 @@ uint32_t padOrderCounter = 0;
 // after its touch pad is released.
 volatile bool holdEnabled = false;
 
-float transitPosition = 0.0f;
+// Time of the sky in cycles (one cycle = one year). It keeps advancing and does
+// not go back to the start at every cycle; it wraps only after kTransitWrap cycles.
+// The fraction (0..1) and the whole cycle number are sent over MIDI.
+constexpr double kTransitWrap = 128.0;
+double transitPosition = 0.0;
 
 // Freeze (Shift + Hold): the sky stops where it is.
 volatile bool skyFrozen = false;
@@ -515,10 +519,10 @@ void AudioCallback(AudioHandle::InputBuffer in,
                 speed = transit.LingerFactor(aspectMask);
             transitPosition += blockSeconds / cycle * speed;
         }
-        while(transitPosition >= 1.0f)
-            transitPosition -= 1.0f;
-        while(transitPosition < 0.0f)
-            transitPosition += 1.0f;
+        while(transitPosition >= kTransitWrap)
+            transitPosition -= kTransitWrap;
+        while(transitPosition < 0.0)
+            transitPosition += kTransitWrap;
     }
     transit.SetPosition(transitPosition);
 
@@ -815,7 +819,12 @@ void AudioCallback(AudioHandle::InputBuffer in,
     g_nuutMidiState.ctrl[7] = alchemyFader;
     g_nuutMidiState.melody  = melodyFader;
     g_nuutMidiState.morph   = morphFader;
-    g_nuutMidiState.transitPos = transitPosition;
+    {
+        // Cycle number first, then the fraction (the page combines them).
+        const double whole = floor(transitPosition);
+        g_nuutMidiState.transitCycle = (int)whole;
+        g_nuutMidiState.transitPos   = (float)(transitPosition - whole);
+    }
     // Web: 0 obsidian, 1 amethyst, 2 aquamarine
     g_nuutMidiState.crystal
         = crystalMode == Switch3::POS_DOWN ? 0
